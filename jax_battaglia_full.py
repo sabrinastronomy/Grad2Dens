@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
+import jax
 from scipy.special import spherical_jn as j_bessel
 
 # Toy Density Field
@@ -79,7 +80,7 @@ class Dens2bBatt:
         self.rs_top_hat_3d_exp = lambda k: 1 - k ** 2 / 10
         self.rs_top_hat_1d = lambda arg: jnp.sinc(arg / jnp.pi)  # engineer's sinc so divide argument by pi
         if self.two_d:
-            self.rs_top_hat_2d_norm = lambda k: 2 * j_bessel(1, k) / k
+            self.rs_top_hat_2d_norm = lambda k: 2 * (jnp.sqrt(jnp.pi/(2*k)) * jax.scipy.special.i1(k)) / k # jax modified bessel function of the first kind, TODO this is modified
             self.rs_top_hat_2d_exp = lambda k: 2 * k / 2 - ((k / 2) ** 3) / 2
             self.bias = jnp.where(self.k_mags * self.delta_pos > 1e-6, self.rs_top_hat_2d_norm(self.k_mags),
                                   self.rs_top_hat_2d_exp(

@@ -13,7 +13,6 @@ from jax.experimental.host_callback import id_print  # this is a way to print in
 from jax.scipy.optimize import \
     minimize as minimize_jax  # this is the bread and butter algorithm of this work, minimization using Jax optimized gradients
 
-
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 # config.update('jax_disable_jit', True) # this turns off jit compiling which is helpful for debugging
 
@@ -38,10 +37,10 @@ matplotlib.rcParams.update({'font.size': 12})
 # print(grad_tanh(110.))
 
 class GradDescent:
-    def __init__(self, z, num_bins, likelihood_off=False, prior_off=False, data=None, truth_field=None, s_field=None, fixed_field=None, noise_off=True,
+    def __init__(self, z, likelihood_off=False, prior_off=False, data=None, truth_field=None, s_field=None, fixed_field=None, noise_off=True,
                  side_length=256, dimensions=2, indep_prior=False, include_param_and_field=False, include_field=False,
                  include_param=False, debug=False,
-                 verbose=False, plot_direc="2D_plots", mask_ionized=False, weighted_prior=False):
+                 verbose=False, plot_direc="2D_plots", mask_ionized=False, autorun=True):
         """
         :param z - the redshift you would like to create your density field at
         :param data (Default: None) - data that you're fitting your field to and will be used in your chi-squared.
@@ -66,7 +65,7 @@ class GradDescent:
         """
         # checking to make sure one of these three is true
         check_setup_bool_arr = [include_field, include_param, include_param_and_field]
-        # assert np.count_nonzero(check_setup_bool_arr) == 1
+        assert np.count_nonzero(check_setup_bool_arr) == 1
         self.z = z
         self.likelihood_off = likelihood_off
         self.prior_off = prior_off
@@ -88,8 +87,7 @@ class GradDescent:
         self.prior_count = 0
         self.likelihood_count = 0
         self.mask_ionized = mask_ionized
-        self.num_bins = num_bins
-        self.weighted_prior = weighted_prior
+
         ### get a tuple with the dimensions of the field
         self.size = []
         for i in range(self.dim):
@@ -115,24 +113,17 @@ class GradDescent:
             # truth field is just unbiased version made with pbox
             self.truth_field = pb_data_unbiased_field.delta_x()
             # We also need the power spectrum box only for the independent prior To do, should this be biased or unbiased
-            if True:
-                counts, self.pspec_box, _ = self.p_spec_normal(self.truth_field, self.num_bins, self.side_length)
-
-            if False: #old version
-                self.fft_truth = self.fft_jax(self.truth_field)
-                self.pspec_box = jnp.abs(self.fft_truth)**2
-                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_box + 1j * self.pspec_box)
+            self.fft_truth = self.fft_jax(self.truth_field)
+            self.pspec_box = jnp.abs(self.fft_truth)**2
+            self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_box + 1j * self.pspec_box)
             ### 2) create data
             self.data = self.bias_field(self.truth_field, None)
         else: # data included in initialization of class
             assert(jnp.shape(self.truth_field)[0] != 0)
             assert(jnp.shape(self.data)[0] != 0)
-            if False: #old version
-                self.fft_truth = self.fft_jax(self.truth_field)
-                self.pspec_box = jnp.abs(self.fft_truth)**2
-                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_box + 1j * self.pspec_box)
-            if True:
-                counts, self.pspec_box, _ = self.p_spec_normal(self.truth_field, self.num_bins, self.side_length)
+            self.fft_truth = self.fft_jax(self.truth_field)
+            self.pspec_box = jnp.abs(self.fft_truth)**2
+            self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_box + 1j * self.pspec_box)
 
         ###############################################################################################################
 
@@ -155,7 +146,8 @@ class GradDescent:
             self.check_field(self.s_field_original, "starting field", show=True)
 
         ###############################################################################################################
-        self.run_grad_descent()
+        if autorun:
+            self.run_grad_descent()
 
     def rerun(self, likelihood_off, prior_off, mask_ionized):
         # sets starting field as best old field
@@ -164,43 +156,10 @@ class GradDescent:
         self.s_field = jnp.asarray(self.best_field_reshaped).flatten()
         if self.mask_ionized:
             self.preserve_original = jnp.copy(self.s_field)
-
         self.likelihood_off = likelihood_off
         self.prior_off = prior_off
         self.mask_ionized = mask_ionized
         self.run_grad_descent()
-
-    def p_spec_normal(self, field, nbins, side_length):
-        """
-        square before averaging (histograming)
-        """
-        fft_data = jnp.fft.fftshift(jnp.fft.fftn(jnp.fft.ifftshift(field)))
-        fft_data_squared = jnp.abs(fft_data) ** 2
-        k_arr = jnp.fft.fftshift(jnp.fft.fftfreq(side_length)) * 2 * jnp.pi
-        k1, k2 = jnp.meshgrid(k_arr, k_arr)
-        k_mag_full = jnp.sqrt(k1 ** 2 + k2 ** 2)
-
-        counts, bin_edges = jnp.histogram(k_mag_full, nbins)
-        binned_power, _ = jnp.histogram(k_mag_full, nbins, weights=fft_data_squared)
-        kvals = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        pspec = binned_power / counts / (side_length ** 2)
-        return counts, pspec, kvals
-
-    def p_spec_pre(self, field, nbins, side_length):
-        """
-        square after averaging (histograming)
-        """
-        fft_data = jnp.fft.fftshift(jnp.fft.fftn(jnp.fft.ifftshift(field)))
-        fft_data = jnp.abs(fft_data)
-        k_arr = jnp.fft.fftshift(jnp.fft.fftfreq(side_length)) * 2 * jnp.pi
-        k1, k2 = jnp.meshgrid(k_arr, k_arr)
-        k_mag_full = jnp.sqrt(k1 ** 2 + k2 ** 2)
-
-        counts, bin_edges = jnp.histogram(k_mag_full, nbins)
-        binned_fft, _ = jnp.histogram(k_mag_full, nbins, weights=fft_data)
-        kvals = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        pspec = binned_fft**2 / counts / (side_length ** 2)
-        return counts, pspec, kvals
 
     def run_grad_descent(self):
         # Start gradient descent ######################################################################################
@@ -216,10 +175,8 @@ class GradDescent:
             self.best_field = self.opt_result
             if self.mask_ionized:
                 # put back the ionized regions
-                print(jnp.shape(self.preserve_original))
-                self.preserve_original = self.preserve_original.at[self.ionized_indices].set(self.best_field[self.ionized_indices])
+                self.preserve_original = self.preserve_original.at[self.ionized_indices].set(self.best_field)
                 self.best_field_reshaped = jnp.array(jnp.reshape(self.preserve_original, self.size))
-
             else:
                 self.best_field_reshaped = jnp.array(jnp.reshape(self.opt_result, self.size))
         else:
@@ -243,9 +200,9 @@ class GradDescent:
         fig.colorbar(im3, ax=ax3)
         ## getting plot title
         if self.noise_off:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.z}_no_noise_.png", dpi=300)
+            fig.savefig(f"{self.plot_direc}/3_panel_z_{self.z}_no_noise_.png", dpi=300)
         else:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.z}_w_noise.png", dpi=300)
+            fig.savefig(f"{self.plot_direc}/3_panel_z_{self.z}_w_noise.png", dpi=300)
         plt.close()
 
     def create_normal_field(self, scale_num):
@@ -305,7 +262,7 @@ class GradDescent:
             plt.imshow(batt_model_instance.X_HI)
             plt.title("X_HI")
             plt.colorbar()
-            plt.savefig(f"{self.plot_direc}/plots/{self.iter_num}_X_HI.png")
+            plt.savefig(str({self.iter_num}) + "_X_HI.png")
         if self.verbose:
             print("The number of neutral pixels is: " )
             id_print(self.neutral_count)
@@ -359,7 +316,7 @@ class GradDescent:
         ax[1].set_xlabel("num iterations")
         ax[1].set_yscale("log")
         ax[1].legend()
-        plt.savefig(f"{self.plot_direc}/plots/param.png")
+        plt.savefig(f"{self.plot_direc}/param.png")
         plt.close()
 
         if self.dim == 2:
@@ -383,7 +340,7 @@ class GradDescent:
                     ax[1].set_xlabel("num iterations")
 
                     fig.suptitle(f"bias = {self.actual_bias}, side length = {self.side_length}")
-                    plt.savefig(f"{self.plot_direc}/plots/pixel_num_{i * j}_check.png")
+                    plt.savefig(f"{self.plot_direc}/pixel_num_{i * j}_check.png")
                     plt.close()
 
         else:
@@ -399,7 +356,7 @@ class GradDescent:
                 ax[1].legend()
                 ax[1].set_xlabel("num iterations")
                 fig.suptitle(f"bias = {self.actual_bias}, side length = {self.side_length}")
-                plt.savefig(f"{self.plot_direc}/plots/pixel_num_{i}_check.png")
+                plt.savefig(f"plots/pixel_num_{i}_check.png")
                 plt.close()
 
     def chi_sq_jax(self, guess):
@@ -426,10 +383,10 @@ class GradDescent:
                                                      self.size)  # note fixed_field was passed in and is a constant
             discrepancy = self.data - biased_field_curr_reshaped
         elif self.include_field:  # param fixed
-            if self.mask_ionized and self.prior_off:
+            if self.mask_ionized:
                 copy_guess = jnp.copy(guess)
                 full_guess = jnp.copy(self.preserve_original)
-                full_guess = full_guess.at[self.ionized_indices].set(copy_guess[self.ionized_indices])
+                full_guess = full_guess.at[self.ionized_indices].set(copy_guess)
                 candidate_field = jnp.reshape(full_guess, self.size)
             else:
                 candidate_field = jnp.reshape(guess, self.size)
@@ -440,9 +397,9 @@ class GradDescent:
 
         ## calculating intermediate pspec
         # fig_ps, ax_ps = plt.subplots()
-        # kvals, pspec = helper_func.p_spec_normal()(self.truth_field, 60, self.side_length)
+        # kvals, pspec = helper_func.bin_density_new(self.truth_field, 60, self.side_length)
         # ax_ps.loglog(kvals, pspec, label="TRUTH", c="g")
-        # kvals, pspec = helper_func.p_spec_normal()(candidate_field.primal, 60, self.side_length)
+        # kvals, pspec = helper_func.bin_density_new(candidate_field.primal, 60, self.side_length)
         # ax_ps.loglog(kvals, pspec, label=str(self.iter_num), c="k")
         # ax_ps.set_title("intermediate pspec - both prior + likelihood on")
         # ax_ps.set_ylim((1e-6, 1e2))
@@ -454,22 +411,13 @@ class GradDescent:
         #### get likelihood for all cases #############################################################################
         likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
         ###############################################################################################################
-
-        if False: # old version
-            # FT and get only the independent modes
-            fourier_box = self.fft_jax(candidate_field)
-            fourier_nums_real, fourier_nums_imag = self.independent_only_jax(fourier_box)
-            real_prior = jnp.dot(fourier_nums_real ** 2, (2 / self.pspec_indep_nums_re))  # Half variance for real
-            imag_prior = jnp.dot(fourier_nums_imag ** 2, (2 / self.pspec_indep_nums_im))  # Half variance for imag
-            prior = real_prior + imag_prior
-
-        if True:
-            counts, power_curr, _ = self.p_spec_normal(candidate_field, self.num_bins, self.side_length)
-            sigma = counts**2
-            x = (self.pspec_box - power_curr).flatten()
-            # denom = jnp.full(jnp.shape(x), 2*sigma**2)
-            prior = jnp.dot(x**2, 1/sigma)
-            ### trying adrian prior here #####
+        print("likelihood worked")
+        # FT and get only the independent modes
+        fourier_box = self.fft_jax(candidate_field)
+        fourier_nums_real, fourier_nums_imag = self.independent_only_jax(fourier_box)
+        real_prior = jnp.dot(fourier_nums_real ** 2, (2 / self.pspec_indep_nums_re))  # Half variance for real
+        imag_prior = jnp.dot(fourier_nums_imag ** 2, (2 / self.pspec_indep_nums_im))  # Half variance for imag
+        prior = real_prior + imag_prior
 
         if self.debug:
             likelihood_all = discrepancy.flatten() ** 2 * 1. / self.N_diag
@@ -495,11 +443,7 @@ class GradDescent:
         elif self.prior_off:
             prior = 0
 
-        if self.weighted_prior:
-            self.final_likelihood_prior = likelihood + 1e4*prior
-
-        else:
-            self.final_likelihood_prior = likelihood + prior
+        self.final_likelihood_prior = likelihood + prior
 
         if self.verbose:
             print("self.likelihood_off", self.likelihood_off)
@@ -511,7 +455,6 @@ class GradDescent:
             print("current final posterior")
             id_print(self.final_likelihood_prior)
         self.iter_num += 1
-
         return self.final_likelihood_prior
 
     def differentiate_2D_func(self):
@@ -526,11 +469,9 @@ class GradDescent:
         elif self.include_field:  # just field
             if self.mask_ionized:
                 self.ionized_indices = jnp.argwhere(self.data.flatten() == 0).flatten()
-            #     x0 = self.s_field[self.ionized_indices]
-            # else:
-            #
-            x0 = self.s_field
-
+                x0 = self.s_field[self.ionized_indices]
+            else:
+                x0 = self.s_field
         opt_result = minimize_jax(func, x0=x0, method='l-bfgs-experimental-do-not-rely-on-this')
         if self.verbose:
             print("Was it successful?")
@@ -564,13 +505,27 @@ class GradDescent:
         plt.tight_layout()
         if save:
             if iteration_number >= 0:
-                plt.savefig(f"{self.plot_direc}/plots/" + f"iter_num_{iteration_number}_" + f"{self.z}" + "_battaglia.png")
+                plt.savefig(f"{self.plot_direc}/" + f"iter_num_{iteration_number}_" + f"{self.z}" + "_battaglia.png")
             else:
-                plt.savefig(f"{self.plot_direc}/plots/" + f"{title}_{self.z}" + "_battaglia.png")
+                plt.savefig(f"{self.plot_direc}/" + f"{title}_{self.z}" + "_battaglia.png")
 
         if show:
             plt.show()
         plt.close()
+
+    def bin_density(self, field, bin=True):
+        if not bin:
+            fft_data = jnp.fft.fftn(field)
+            fft_data_squared = fft_data ** 2  # NOT ABSOLUTE JUST TAKING DELTA ^ 2
+            k_arr = jnp.fft.fftfreq(self.side_length) * 2 * jnp.pi
+            k1, k2 = jnp.meshgrid(k_arr, k_arr)
+            k_mag_full = jnp.sqrt(k1 ** 2 + k2 ** 2)
+            k_mag = k_mag_full.flatten()
+            fft_data_squared = fft_data_squared.flatten()
+            return k_mag, fft_data_squared
+        else:
+            p_k_field, bins_field = pbox.get_power(field, self.side_length)
+            return bins_field.flatten(), p_k_field.flatten()
 
 if __name__ == "__main__":
     import time
