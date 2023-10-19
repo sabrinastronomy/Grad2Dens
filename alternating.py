@@ -8,6 +8,9 @@ from jax_main import GradDescent
 import numpy as np
 import matplotlib.pyplot as plt
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
+import os
+from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are preself.compiledd
+from matplotlib.ticker import MaxNLocator
 
 # plotting pspec for each iteration
 from jax_battaglia_full import Dens2bBatt
@@ -25,38 +28,64 @@ class InferDens(GradDescent):
     This class allows you to pass in a brightness temperature field measurement at a particular redshift
     and infer the density field.
     """
-    def __init__(self, z, num_bins=None, mask_ionized=False, nothing_off=False, brightness_temperature_field=None, plot_direc="data_adversarial_new_prior", side_length=256,
-                 dimensions=2, iter_num_max=10, rest_num_max=3, noise_off=True, save_posterior_values=False, run_optimizer=False,
-                 pspec_on_plot=False, mse_plot_on=False, weighted_prior=None):
-        self.plot_direc = plot_direc # this overwrites the plot_directory in the GradDescent class
+    def __init__(self, seed, z, truth_field, num_bins=None, mask_ionized=False, nothing_off=False, brightness_temperature_field=None, plot_direc="", side_length=256,
+                 dimensions=2, iter_num_max=10, rest_num_max=3, noise_off=False, save_posterior_values=False, run_optimizer=False,
+                 pspec_on_plot=False, mse_plot_on=False, weighted_prior=None, new_prior=False, old_prior=False, verbose=False):
         self.z = z
-        print(num_bins)
-        super().__init__(self.z, num_bins=num_bins, data=brightness_temperature_field, side_length=side_length,
-                               dimensions=dimensions, include_field=True, plot_direc=self.plot_direc,
-                               indep_prior=True, verbose=True, noise_off=noise_off, weighted_prior=weighted_prior)
+        self.seed = seed
+        super().__init__(self.seed, self.z, num_bins=num_bins, data=brightness_temperature_field, side_length=side_length,
+                                   dimensions=dimensions, plot_direc=plot_direc,
+                                    verbose=verbose, noise_off=noise_off, weighted_prior=weighted_prior, new_prior=new_prior,
+                                    old_prior=old_prior, truth_field=truth_field)
         self.iter_num_max = iter_num_max # number of iterations over which to minimize posterior
         self.rest_num_max = rest_num_max # number of iterations to rest on the given configuration
         self.save_posterior_values = save_posterior_values
-        self.mse_vals = jnp.empty(self.iter_num_max)
-        self.posterior_vals = jnp.empty(self.iter_num_max)
+
         self.pspec_on = pspec_on_plot
         self.mse_plot_on = mse_plot_on
-        self.mask_ionized_after_first = mask_ionized
-        self.mask_ionized = False
+        self.mask_ionized = mask_ionized
         self.nothing_off = nothing_off
+
+        self.final_function_value_output = jnp.zeros(self.iter_num_max)
+        self.mse_vals = jnp.empty(self.iter_num_max)
+        self.posterior_vals = jnp.empty(self.iter_num_max)
+        self.likelihood_vals = jnp.empty(self.iter_num_max)
+        self.prior_vals = jnp.empty(self.iter_num_max)
+        self.pixel_tracks_ionized = jnp.empty(self.iter_num_max)
+        self.pixel_tracks_neutral = jnp.empty(self.iter_num_max)
+        self.hessian_vals = jnp.empty(self.iter_num_max)
+
+        self.labels = []
+
+        if plot_direc == "":
+            perc_ionized = round(len(self.ionized_indices) / self.side_length**2, 1)
+            if old_prior:
+                new_direc = f"perc_ionized_{perc_ionized}_old_seed_{seed}_bins_{num_bins}"
+            elif new_prior:
+                new_direc = f"perc_ionized_{perc_ionized}_seed_{seed}_bins_{num_bins}"
+
+            if self.truth_field.any() != None:
+                new_direc = "diff_start_" + new_direc
+            try:
+                os.mkdir(new_direc)
+                os.mkdir(new_direc + "/plots")
+                os.mkdir(new_direc + "/npy")
+            except:
+                print("directory already exists")
+            self.plot_direc = new_direc
+        else:
+            self.plot_direc = plot_direc # this overwrites the plot_directory in the GradDescent class
+
         if run_optimizer:
             self.infer_density_field()
+        print("Saving plots here...")
+        print(self.plot_direc)
 
     def check_threshold(self):
         batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.z, flow=True)
         temp_model_brightness = batt_model_instance.temp_brightness
         root_mse_curr = self.root_mse(self.data, temp_model_brightness)
-        # if root_mse_curr > 1 and root_mse_curr < 150:
-        #     print("Converged to less than 150 MSE.")
-        #     # exit()
         return root_mse_curr
-
-
 
     def root_mse(self, field_mod, field_predicted):
         std_dev_field_mod = jnp.std(field_mod)
@@ -68,14 +97,20 @@ class InferDens(GradDescent):
     def infer_density_field(self):
         rest_num = 0
         for iter_num_big in range(self.iter_num_max):
+            self.iter_num_big = iter_num_big
             if iter_num_big == 0:
                 if self.nothing_off:
                     self.prior_off = False
                     self.likelihood_off = False
                 else:
                     # first iteration, we keep just the likelihood on
+                    # self.likelihood_cand_fields = jnp.zeros((self.side_length**2, 1000))
                     self.prior_off = True
                     self.likelihood_off = False
+                print("current iteration")
+                print(f"likelihood on {self.prior_off}")
+                print(f"prior on {self.likelihood_off}")
+                print(f"mask on {self.mask_ionized}")
                 self.run_grad_descent()
 
                 ### checking whether truth field returns higher posterior than best guessed field
@@ -88,14 +123,13 @@ class InferDens(GradDescent):
                 # print("starting FIELD---------------------------------------")
                 # self.chi_sq_jax(self.s_field_original)
 
+                self.check_field(self.s_field_original, "starting field", show=True, save=True,
+                                 iteration_number=-1)
                 self.check_field(self.truth_field, "truth_field", show=True, save=True,
                                  iteration_number=-1)
-
                 self.check_field(self.data, "data", show=True, save=True,
                                  iteration_number=-1)
 
-                self.check_field(self.best_field_reshaped, "data", show=True, save=True,
-                                 iteration_number=-1)
                 np.save(self.plot_direc + f"/npy/truth_field_{self.z}.npy", self.truth_field)
                 np.save(self.plot_direc + f"/npy/data_field_{self.z}.npy", self.data)
 
@@ -105,22 +139,31 @@ class InferDens(GradDescent):
                         self.prior_off = not self.prior_off
                         self.likelihood_off = not self.likelihood_off
                         rest_num = 0
-                    self.mask_ionized = self.mask_ionized_after_first
-                    print(self.mask_ionized)
-                    # if self.z < 10:
-                    #     self.mask_ionized = True
-                    # else:
-                    #     self.mask_ionized = False
-
+                    if self.z < 10 and self.likelihood_off:
+                        self.mask_ionized = True
+                    else:
+                        # self.likelihood_cand_fields = jnp.zeros((self.side_length ** 2, 1000))
+                        self.mask_ionized = False
+                print("current iteration")
+                print(f"likelihood on {self.prior_off}")
+                print(f"prior on {self.likelihood_off}")
+                print(f"mask on {self.mask_ionized}")
                 self.rerun(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized)
 
-            rest_num += 1
             if not self.likelihood_off and not self.prior_off:
                 self.plot_title = "both_on"
             elif self.likelihood_off:
                 self.plot_title = "likelihood_off"
             elif self.prior_off:
                 self.plot_title = "prior_off"
+                new_direc = f"{self.seed}_confirming_hypothesis_{self.iter_num_big}"
+
+                try:
+                    os.mkdir(new_direc)
+                except:
+                    print("directory already exists")
+                jnp.save(f"{new_direc}/intermediate_field_{self.iter_num_big}.npy", self.likelihood_cand_fields)
+                print("Saving intermediate fields when likelihood on!")
             else:
                 print("Something is wrong as neither the likelihood or prior is on.")
                 exit()
@@ -128,22 +171,66 @@ class InferDens(GradDescent):
             self.check_field(self.best_field_reshaped, self.plot_title, show=True, save=True,
                                  iteration_number=iter_num_big)
 
-            # checking only at the end of a round of likelihood/prior off
-            self.mse_vals = self.mse_vals.at[iter_num_big].set(self.check_threshold())
+            # saving information only at the end of a round of likelihood/prior off
+            # getting 0th ionized/neutral index and saving to array
+            ionized_ind = self.ionized_indices[0]
+            neutral_ind = self.neutral_indices[0]
+            ionized_val = self.best_field.flatten()[ionized_ind]
+            neutral_val = self.best_field.flatten()[neutral_ind]
+            self.pixel_tracks_ionized = self.pixel_tracks_ionized.at[iter_num_big].set(ionized_val)
+            self.pixel_tracks_neutral = self.pixel_tracks_neutral.at[iter_num_big].set(neutral_val)
 
-            if self.save_posterior_values:
-                self.posterior_vals = self.posterior_vals.at[iter_num_big].set(self.final_likelihood_prior.primal)
-                np.save(self.plot_direc + f"/npy/posterior_vals_{self.z}.npy",self.posterior_vals)
+            # getting mse vals, final function val from optimizer, likelihood vals, posterior vals
+            self.mse_vals = self.mse_vals.at[iter_num_big].set(self.check_threshold())
+            self.final_function_value_output = self.final_function_value_output.at[iter_num_big].set(self.final_func_val)
+
+            prior, likelihood = self.calc_prior_likelihood(self.best_field_reshaped)
+            self.prior_vals = self.prior_vals.at[iter_num_big].set(prior)
+            self.likelihood_vals = self.likelihood_vals.at[iter_num_big].set(likelihood)
+            self.posterior_vals = self.likelihood_vals.at[iter_num_big].set(prior + likelihood)
+
+            # save intermediate arrays of all important quantities
+            np.save(self.plot_direc + f"/npy/prior_vals_{self.z}.npy", self.prior_vals)
+            np.save(self.plot_direc + f"/npy/likelihood_vals_{self.z}.npy", self.likelihood_vals)
+            np.save(self.plot_direc + f"/npy/posterior_vals_{self.z}.npy", self.posterior_vals)
+            np.save(self.plot_direc + f"/npy/optimizer_output_vals_{self.z}.npy", self.final_function_value_output)
+            np.save(self.plot_direc + f"/npy/hessian_vals_{self.z}.npy", self.hessian_vals)
 
             np.save(self.plot_direc + f"/npy/mse_vals_{self.z}.npy", self.mse_vals)
-            np.save(self.plot_direc + f"/npy/{self.plot_title}_best_field_{self.z}_{iter_num_big}.npy", self.best_field_reshaped)
+            np.save(self.plot_direc + f"/npy/best_field_{self.z}_{iter_num_big}.npy", self.best_field_reshaped)
 
-            print("current iteration")
-            print(iter_num_big)
+            self.labels.append(self.plot_title) # saving configuration of each iteration in list
+            np.save(self.plot_direc + f"/npy/labels.npy", self.labels)
+
+            rest_num += 1 # INCREASE REST NUM ONE
+
+
+        np.save(self.plot_direc + f"/npy/{self.plot_title}_best_field_{self.z}_FINAL.npy",
+                self.best_field_reshaped)
+
+    def plot_pixels(self):
+        fig_track, axes_track = plt.subplots()
+        like_fig_track, like_axes_track = plt.subplots()
+
+        axes_track.set_yscale("symlog")
+        like_axes_track.set_yscale("symlog")
+        axes_track.plot(self.pixel_tracks_ionized, c="red")
+        axes_track.plot(self.pixel_tracks_neutral, c="green")
+        ionized_ind = self.ionized_indices[0]
+        neutral_ind = self.neutral_indices[0]
+        axes_track.hlines(self.truth_field.flatten()[ionized_ind], 0, self.iter_num_max, label="ionized pixel", color="red")
+        axes_track.hlines(self.truth_field.flatten()[neutral_ind], 0, self.iter_num_max, label="neutral pixel", color="green")
+        axes_track.legend()
+        fig_track.savefig(self.plot_direc + "/plots/tracking_pixels.png")
+
+    def plot_hessian(self):
+        plt.close()
+        plt.plot(self.hessian_vals)
+        plt.savefig("hessian.png", dpi=300)
 
     def plot_pspec_and_panel(self, tick_font_size=7, normalize=False):
-        figsize = (8, 12)
-        rows = 4
+        figsize = (8, 64)
+        rows = 20
         cols = 2
 
         if normalize:
@@ -153,55 +240,21 @@ class InferDens(GradDescent):
             data = np.load(self.plot_direc + f"/npy/data_field_{self.z}.npy")
             data_fig, data_axes = plt.subplots(rows, cols, figsize=figsize)
 
-        if self.mse_plot_on:
-            mse_vals = np.load(self.plot_direc + f"/npy/mse_vals_{self.z}.npy")
-
         if self.pspec_on:
-            _, pspec_truth, kvals = self.p_spec_normal(truth_field, self.num_bins, self.side_length)
+            _, pspec_truth, kvals = self.p_spec_normal(truth_field, self.num_bins)
             fig_pspec, axes_pspec = plt.subplots()
             axes_pspec.loglog(kvals, pspec_truth, label=f"Truth field", lw=3, c="k")
 
         fig, axes = plt.subplots(rows, cols, figsize=figsize)
-
-
-        # prior_off = True
-        # likelihood_off = False
-        k = 0
-        rest_num = 0
+        labels = np.load(self.plot_direc + f"/npy/labels.npy")
 
         # make data/density field panels and pspec simultaneously
+        k = 0
         for i in range(rows):
             for j in range(cols):
                 print("plotting", (i,j))
-                ### annoying labels
-                if k == 0:
-                    if self.nothing_off:
-                        self.prior_off = False
-                        self.likelihood_off = False
-                    else:
-                        # first iteration, we keep just the likelihood on
-                        self.prior_off = True
-                        self.likelihood_off = False
-
-                else:
-                    if not self.nothing_off:  # if both on this is skipped
-                        if rest_num == self.rest_num_max or self.prior_off:
-                            self.prior_off = not self.prior_off
-                            self.likelihood_off = not self.likelihood_off
-                            rest_num = 0
-                        self.mask_ionized = self.mask_ionized_after_first
-                rest_num += 1
-                if not self.likelihood_off and not self.prior_off:
-                    self.plot_title = "both_on"
-                elif self.likelihood_off:
-                    self.plot_title = "likelihood_off"
-                elif self.prior_off:
-                    self.plot_title = "prior_off"
-                else:
-                    print("Something is wrong as neither the likelihood or prior is on.")
-                    exit()
+                self.plot_title = labels[k]
                 if i == 0 and j == 0:
-                    title = "(not masked)\nlikelihood only "
                     if normalize:
                         hist, bin_edges = np.histogram(truth_field, bins=1000)
                         axes[i][j].plot(bin_edges[1:], hist)
@@ -210,7 +263,7 @@ class InferDens(GradDescent):
                         axes[i][j].set_xlim(-10**1, 10**2)
                         continue
                     else:
-                        im = axes[i][j].imshow(truth_field, vmin=-1, vmax=2)
+                        im = axes[i][j].imshow(truth_field) #, vmin=-1, vmax=2)
                         divider = make_axes_locatable(axes[i][j])
                         cax = divider.append_axes('bottom', size='5%', pad=0.05)
                         cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
@@ -231,7 +284,7 @@ class InferDens(GradDescent):
                         data_axes[i][j].set_aspect('equal')
                         continue
 
-                best_field = np.load(self.plot_direc + f"/npy/{self.plot_title}_best_field_{self.z}_{k}.npy")
+                best_field = np.load(self.plot_direc + f"/npy/best_field_{self.z}_{k}.npy")
                 if normalize:
                     hist, bin_edges = np.histogram(best_field, bins=1000)
                     axes[i][j].plot(bin_edges[1:], hist)
@@ -240,12 +293,12 @@ class InferDens(GradDescent):
                     axes[i][j].set_xlim(-10 **1, 10 ** 2)
 
                 else:
-                    im = axes[i][j].imshow(best_field, vmin=-1, vmax=2)
+                    im = axes[i][j].imshow(best_field) #, vmin=-1, vmax=2)
                     divider = make_axes_locatable(axes[i][j])
                     cax = divider.append_axes('bottom', size='5%', pad=0.05)
                     cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                     cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = axes[i][j].text(20, 220, f"Iteration #{k} \nwith " + title, color="black", weight='bold')
+                    t = axes[i][j].text(20, 220, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
                     t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                     axes[i][j].set_xticks([])
                     axes[i][j].set_aspect('equal')
@@ -257,22 +310,22 @@ class InferDens(GradDescent):
                     cax = divider.append_axes('bottom', size='5%', pad=0.05)
                     cbar = data_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                     cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = data_axes[i][j].text(20, 220, f"Iteration #{k} \nwith " + title, color="black", weight='bold')
+                    t = data_axes[i][j].text(20, 220, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
                     t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                     data_axes[i][j].set_xticks([])
                     data_axes[i][j].set_aspect('equal')
 
                 if self.pspec_on:
-                    if k in [0, 2, 5, 10]:
-                        counts, pspec_normal, kvals = self.p_spec_normal(best_field, self.num_bins, self.side_length)
-                        counts, pspec_pre, kvals = self.p_spec_pre(best_field, self.num_bins, self.side_length)
-                        # print(counts)
-                        poisson_rms = np.sqrt(np.abs(pspec_normal - pspec_pre)) / np.sqrt(counts)
-                        print(poisson_rms)
-                        # axes_pspec.plot(kvals, pspec_normal)
-                        axes_pspec.errorbar(kvals, pspec_normal, yerr=poisson_rms, label=f"Iteration # {k} with {title}", ls="--", alpha=0.3)
-                        axes_pspec.set_xscale("log")
-                        axes_pspec.set_yscale("log")
+                    counts, pspec_normal, kvals = self.p_spec_normal(best_field, self.num_bins)
+                    counts, pspec_pre, kvals = self.p_spec_pre(best_field, self.num_bins)
+                    # poisson_rms = np.sqrt(np.abs(pspec_normal - pspec_pre)) / np.sqrt(counts)
+                    # print(poisson_rms)
+                    # axes_pspec.errorbar(kvals, pspec_normal, yerr=poisson_rms, label=f"Iteration # {k} with {title}", ls="--", alpha=0.3)
+                    axes_pspec.errorbar(kvals, pspec_normal,
+                                        label=f"Iteration # {k} with {self.plot_title}", ls="--", alpha=0.3)
+
+                    axes_pspec.set_xscale("log")
+                    axes_pspec.set_yscale("log")
 
                 k += 1
 
@@ -283,134 +336,81 @@ class InferDens(GradDescent):
                 fig_pspec.savefig(self.plot_direc + "/plots/pspec.png", dpi=300)
                 plt.close(fig_pspec)
 
-            # fig.tight_layout()
-
             if normalize:
                 fig.savefig(self.plot_direc + "/plots/normalize_field_panel_iterations.png", dpi=300)
             else:
-                fig.savefig(self.plot_direc + "/plots/field_panel_iterations.png", dpi=300)
+                fig.savefig(self.plot_direc + "/plots/field_panel_iterations.png") #, dpi=300)
                 data_fig.tight_layout()
                 data_fig.savefig(self.plot_direc + "/plots/data_panel_iterations.png", dpi=300)
 
                 plt.close(data_fig)
             plt.close(fig)
 
-        if self.mse_plot_on:
-            ### plotting mse vals
-            fig_mse, ax_mse = plt.subplots()
-            length_of_runs = len(mse_vals[mse_vals > 0]) - 1
-
-            ax_mse.semilogy(mse_vals[:length_of_runs], label="mean square error", ls=None)
-            low_lim_ax, upper_lim_ax = ax_mse.get_ylim()[0], ax_mse.get_ylim()[1]
-
-            ax_mse.vlines(3, low_lim_ax, upper_lim_ax, label="Iteration #3", color="blue")
-            ax_mse.vlines(6, low_lim_ax, upper_lim_ax, label="Iteration #6", color="orange")
-            ax_mse.vlines(9, low_lim_ax, upper_lim_ax, label="Iteration #9", color="green")
-            ax_mse.vlines(12, low_lim_ax, upper_lim_ax, label="Iteration #12", color="red")
-
-            ax_mse.set_xlim(None, length_of_runs)
-            ax_mse.set_xlabel("iteration")
-            ax_mse.legend()
-            fig_mse.savefig(self.plot_direc + f"/plots/all_mse_post_{self.z}.png")
-
-    def get_prior_likelihood_post(self):
-        self.like_arr = np.zeros(self.iter_num_max)
-        self.prior_arr = np.zeros(self.iter_num_max)
-
-        truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.z}.npy")
-        data = np.load(self.plot_direc + f"/npy/data_field_{self.z}.npy")
-        counts, pspec_box, _ = self.p_spec_normal(truth_field, self.num_bins, self.side_length)
-        rest_num = 0
-        labels = []
-        for iter_num_big in range(self.iter_num_max):
-            ### annoying labels
-            if iter_num_big == 0:
-                if self.nothing_off:
-                    self.prior_off = False
-                    self.likelihood_off = False
-                else:
-                    # first iteration, we keep just the likelihood on
-                    self.prior_off = True
-                    self.likelihood_off = False
-
-            else:
-                if not self.nothing_off:  # if both on this is skipped
-                    if rest_num == self.rest_num_max or self.prior_off:
-                        self.prior_off = not self.prior_off
-                        self.likelihood_off = not self.likelihood_off
-                        rest_num = 0
-                    self.mask_ionized = self.mask_ionized_after_first
-            rest_num += 1
-            if not self.likelihood_off and not self.prior_off:
-                self.plot_title = "both_on"
-            elif self.likelihood_off:
-                self.plot_title = "likelihood_off"
-            elif self.prior_off:
-                self.plot_title = "prior_off"
-            else:
-                print("Something is wrong as neither the likelihood or prior is on.")
-                exit()
-
-            best_field = np.load(self.plot_direc + f"/npy/{self.plot_title}_best_field_{self.z}_{iter_num_big}.npy")
 
 
-            candidate_field = jnp.reshape(best_field, self.size)
-
-            # note param_init was passed in and is a constant
-            discrepancy = data - self.bias_field(candidate_field)
-            likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
-            self.like_arr[iter_num_big] = likelihood
-            #### prior
-            counts, power_curr, _ = self.p_spec_normal(candidate_field, self.num_bins, self.side_length)
+    def calc_prior_likelihood(self, field):
+        field = jnp.reshape(field, self.size)
+        assert np.shape(field) == (self.side_length, self.side_length)
+        # note param_init was passed in and is a constant
+        discrepancy = self.data - self.bias_field(field)
+        likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
+        #### prior
+        if self.new_prior:
+            counts, power_curr, _ = self.p_spec_normal(field, self.num_bins)
             sigma = counts ** 2
-            x = (pspec_box - power_curr).flatten()
+            x = (self.pspec_box - power_curr).flatten()
             prior = jnp.dot(x ** 2, 1 / sigma)
-            self.prior_arr[iter_num_big] = prior
-            labels.append(self.plot_title)
+        elif self.original_prior:
+            # FT and get only the independent modes
+            fourier_box = self.fft_jax(field)
+            fourier_nums_real, fourier_nums_imag = self.independent_only_jax(fourier_box)
+            real_prior = jnp.dot(fourier_nums_real ** 2, (2 / self.pspec_indep_nums_re))  # Half variance for real
+            imag_prior = jnp.dot(fourier_nums_imag ** 2, (2 / self.pspec_indep_nums_im))  # Half variance for imag
+            prior = real_prior + imag_prior
+        return prior, likelihood
 
-        print("final prior array")
-        print(self.prior_arr)
-
-        self.labels = labels
-        np.save(self.plot_direc + f"/npy/prior_arr_{self.z}.npy", self.prior_arr)
-        np.save(self.plot_direc + f"/npy/like_arr_{self.z}.npy", self.like_arr)
-
-
-
-    def plot_mse_prior_likelihood(self):
+    def plot_all_optimizer_vals(self):
+        """
+        This function plots likelihood, prior, posterior, returned optimizer function value, and mse values loaded in,
+        such that we can plot after the fact as well
+        """
         ### plotting mse vals
         mse_vals = np.load(self.plot_direc + f"/npy/mse_vals_{self.z}.npy")
-        self.get_prior_likelihood_post()
-        self.prior_arr = np.load(self.plot_direc + f"/npy/prior_arr_{self.z}.npy")
-        self.like_arr = np.load(self.plot_direc + f"/npy/like_arr_{self.z}.npy")
-        plt.close()
-        plt.semilogy(self.prior_arr, label="prior")
-        plt.semilogy(self.like_arr, label="likelihood")
-        plt.semilogy(mse_vals, label="mse")
-        plt.xlim(0, 10)
-        plt.legend()
-        plt.show()
-
-
+        prior_arr = np.load(self.plot_direc + f"/npy/prior_vals_{self.z}.npy")
+        like_arr = np.load(self.plot_direc + f"/npy/likelihood_vals_{self.z}.npy")
+        posterior_arr = np.load(self.plot_direc + f"/npy/posterior_vals_{self.z}.npy")
+        print("like arr")
+        print(like_arr)
+        print("prior arr")
+        print(prior_arr)
+        print("actual")
+        print(posterior_arr)
+        print("summed")
+        print(like_arr + prior_arr)
+        print("actual")
+        print(posterior_arr)
+        final_function_value_output = np.load(self.plot_direc + f"/npy/optimizer_output_vals_{self.z}.npy")
+        labels = np.load(self.plot_direc + f"/npy/labels.npy")
         fig_mse, ax_mse = plt.subplots()
-
-        ax_mse.semilogy(mse_vals, label="MSE new prior", ls=None)
-        ax_mse.semilogy(self.prior_arr, label="prior", ls=None)
-        ax_mse.semilogy(self.like_arr, label="likelihood", ls=None)
-
-
-        # ax_mse.set_xlim(None, 350)
-        low_lim_ax, upper_lim_ax = ax_mse.get_ylim()[0], ax_mse.get_ylim()[1]
+        ax_mse.semilogy(mse_vals, label="Mean square error", ls=None)
+        ax_mse.semilogy(prior_arr, label="Prior", ls="--")
+        ax_mse.semilogy(like_arr, label="Likelihood", ls="--")
+        # ax_mse.semilogy(posterior_arr, label="Posterior")
+        # ax_mse.semilogy(final_function_value_output, label="Output from minimizer", ls="--")
 
         for iter_num_big in range(self.iter_num_max):
-            ax_mse.vlines(iter_num_big, low_lim_ax, upper_lim_ax, ls="--", color="k")
-            ax_mse.text(iter_num_big - 0.4, low_lim_ax, self.labels[iter_num_big], fontsize=12, rotation="vertical", alpha=0.5)
-
-
-        ax_mse.set_xlabel("iteration")
+            if labels[iter_num_big] == "prior_off" and iter_num_big == 0:
+                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="*", c="black", label="likelihood only, mask off")
+            elif labels[iter_num_big] == "likelihood_off" and iter_num_big == 1:
+                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="o", c="black", label="prior only, mask on")
+            elif labels[iter_num_big] == "prior_off":
+                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="*", c="black")
+            elif labels[iter_num_big] == "likelihood_off":
+                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="o", c="black")
+        ax_mse.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax_mse.set_xlabel("Iteration")
         ax_mse.legend()
-        fig_mse.savefig(self.plot_direc + f"/plots/prior_likelihood_mse_post_{self.z}.png")
-
+        fig_mse.savefig(self.plot_direc + f"/plots/prior_likelihood_mse_post_{self.z}.png", dpi=300)
 
     def plot_2_mse(self, mse_val_1="data_adversarial_new_prior", mse_val_2="data_adversarial_classic_prior"):
         ### plotting mse vals
@@ -442,7 +442,6 @@ class InferDens(GradDescent):
 if __name__ == "__main__":
     print("starting")
     # samp = InferDens(z=8, num_bins=256, nothing_off=False, mask_ionized=True, iter_num_max=10, plot_direc="data_adversarial_new_prior_256_bins", run_optimizer=True, weighted_prior=False)
-
     # samp = InferDens(z=8, num_bins=10, nothing_off=False, mask_ionized=True, iter_num_max=10, plot_direc="data_adversarial_new_prior_10_bins", run_optimizer=False, weighted_prior=False)
     # samp.plot_mse_prior_likelihood()
     # samp = InferDens(z=8, num_bins=100, nothing_off=False, mask_ionized=True, iter_num_max=10, plot_direc="data_adversarial_new_prior_100_bins", run_optimizer=False, weighted_prior=False)
@@ -451,12 +450,98 @@ if __name__ == "__main__":
     # samp.plot_mse_prior_likelihood()
     # samp = InferDens(z=8, num_bins=256, nothing_off=False, mask_ionized=True, iter_num_max=10, plot_direc="data_adversarial_new_prior_256_bins", run_optimizer=False, weighted_prior=False)
     # samp.plot_mse_prior_likelihood()
+    for i in [509]:
+        if i in [229, 509]:
+            perc_ionized = 0.2
+        else:
+            perc_ionized = 0.1
+        truth_field = np.load(f"/Users/sabrinaberger/just_grad_descent/perc_ionized_{perc_ionized}_old_seed_{i}_bins_256/npy/truth_field_8.npy")
+        data = np.load(f"/Users/sabrinaberger/just_grad_descent/perc_ionized_{perc_ionized}_old_seed_{i}_bins_256/npy/data_field_8.npy")
 
-    samp = InferDens(z=8, num_bins=100, nothing_off=False, mask_ionized=True, iter_num_max=20,
-                     plot_direc="data_adversarial_new_prior_100_bins_no_weighted_prior", run_optimizer=True,
-                     weighted_prior=False)
-    # samp.plot_pspec_and_panel(normalize=True)
-    # samp.plot_pspec_and_panel(normalize=False)
+        # i = np.random.randint(0, 1e3)
+        samp = InferDens(i, z=8, truth_field=truth_field, brightness_temperature_field=data, num_bins=256, mask_ionized=False, iter_num_max=40, side_length=256,
+                         plot_direc="", run_optimizer=True, weighted_prior=False, new_prior=True, old_prior=False, nothing_off=False, verbose=False,
+                         pspec_on_plot=True)
+        # samp.get_prior_likelihood_post()
+        # samp.plot_mse_prior_likelihood()
+        # samp.plot_pixels()
+        # samp.plot_all_optimizer_vals()
+        samp.plot_pspec_and_panel(normalize=True)
+        samp.plot_pspec_and_panel(normalize=False)
 
-    samp.plot_mse_prior_likelihood()
-
+    # def get_prior_likelihood_post(self):
+    #     self.like_arr = np.zeros(self.iter_num_max)
+    #     self.prior_arr = np.zeros(self.iter_num_max)
+    #
+    #     truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.z}.npy")
+    #     data = np.load(self.plot_direc + f"/npy/data_field_{self.z}.npy")
+    #     counts, pspec_box, _ = self.p_spec_normal(truth_field, self.num_bins)
+    #     rest_num = 0
+    #     labels = []
+    #
+    #     for iter_num_big in range(self.iter_num_max):
+    #         ### annoying labels
+    #         if iter_num_big == 0:
+    #             if self.nothing_off:
+    #                 self.prior_off = False
+    #                 self.likelihood_off = False
+    #             else:
+    #                 # first iteration, we keep just the likelihood on
+    #                 self.prior_off = True
+    #                 self.likelihood_off = False
+    #         else:
+    #             if not self.nothing_off: # if both on this is skipped
+    #                 if rest_num == self.rest_num_max or self.prior_off:
+    #                     self.prior_off = not self.prior_off
+    #                     self.likelihood_off = not self.likelihood_off
+    #                     rest_num = 0
+    #                 # print(self.mask_ionized)
+    #                 if self.z < 10 and self.likelihood_off:
+    #                     self.mask_ionized = True
+    #                 else:
+    #                     self.mask_ionized = False
+    #
+    #         rest_num += 1
+    #         if not self.likelihood_off and not self.prior_off:
+    #             self.plot_title = "both_on"
+    #         elif self.likelihood_off:
+    #             self.plot_title = "likelihood_off"
+    #         elif self.prior_off:
+    #             self.plot_title = "prior_off"
+    #         else:
+    #             print("Something is wrong as neither the likelihood or prior is on.")
+    #             exit()
+    #
+    #         best_field = np.load(self.plot_direc + f"/npy/{self.plot_title}_best_field_{self.z}_{iter_num_big}.npy")
+    #
+    #         candidate_field = jnp.reshape(best_field, self.size)
+    #
+    #         # note param_init was passed in and is a constant
+    #         discrepancy = data - self.bias_field(candidate_field)
+    #         likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
+    #         self.like_arr[iter_num_big] = likelihood
+    #         #### prior
+    #         if self.new_prior:
+    #             counts, power_curr, _ = self.p_spec_normal(candidate_field, self.num_bins)
+    #             sigma = counts ** 2
+    #             x = (pspec_box - power_curr).flatten()
+    #             prior = jnp.dot(x ** 2, 1 / sigma)
+    #         elif self.original_prior:
+    #             fourier_box = self.fft_jax(candidate_field)
+    #             fourier_nums_real, fourier_nums_imag = self.independent_only_jax(fourier_box)
+    #             real_prior = jnp.dot(fourier_nums_real ** 2, (2 / self.pspec_indep_nums_re))  # Half variance for real
+    #             imag_prior = jnp.dot(fourier_nums_imag ** 2, (2 / self.pspec_indep_nums_im))  # Half variance for imag
+    #             prior = real_prior + imag_prior
+    #
+    #         self.prior_arr[iter_num_big] = prior
+    #
+    #
+    #     # print("final prior array")
+    #     # print(self.prior_arr)
+    #
+    #     # print("final likelihood array")
+    #     # print(self.likelihood_arr)
+    #
+    #     self.labels = labels
+    #     np.save(self.plot_direc + f"/npy/prior_arr_{self.z}.npy", self.prior_arr)
+    #     np.save(self.plot_direc + f"/npy/like_arr_{self.z}.npy", self.like_arr)
