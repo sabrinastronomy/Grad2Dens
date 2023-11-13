@@ -15,6 +15,7 @@ import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are precompiled
 
+
 ### defaults for paper plots
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
 matplotlib.rcParams['font.family'] = 'STIXGeneral'
