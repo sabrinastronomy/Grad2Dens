@@ -35,6 +35,8 @@ class Dens2bBatt:
             print("Unsupported field dimensions!")
             exit()
 
+        if debug:
+            print(f"Density dimensions are {density.ndim}")
         self.density = density
         self.set_z = set_z
         self.delta_pos = delta_pos  # Mpc
@@ -86,6 +88,8 @@ class Dens2bBatt:
                                   self.rs_top_hat_2d_exp(
                                       self.k_mags))  # issue with NonConcreteBooleans in JAX, need this syntax
         elif self.one_d:
+            self.constant = 1
+            print("Unsure what this constant should be in 1D?")
             self.rs_top_hat_1d = lambda arg: self.constant * jnp.sinc(
                 arg / jnp.pi)  # engineer's sinc so divide argument by pi
             self.tophatted_ks = self.rs_top_hat_1d(self.k_mags)
@@ -169,45 +173,49 @@ class Dens2bBatt:
 
 
 
-# if __name__ == "__main__":
-    # rho = jnp.asarray([1.92688, -0.41562])
-    # z = 15
-    # dens2Tb = Dens2bBatt(rho, 1, z)
-    # Tb = dens2Tb.temp_brightness
-    # print(Tb)
+if __name__ == "__main__":
+    import jax_main
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    rho = jnp.asarray([1.92688, -0.41562])
+    z = 15
+    dens2Tb = Dens2bBatt(rho, 1, z)
+    Tb = dens2Tb.temp_brightness
+    print(Tb)
 
-#     for z in [14]:
-#         dir = "/Users/sabrinaberger/Library/Mobile Documents/com~apple~CloudDocs/CosmicDawn/building/21cmFASTBoxes_{}/PerturbedField_*".format(z)
-#         hf = h5py.File(glob.glob(dir)[0], 'r')
-#         data = hf["PerturbedField/density"]
-#
-#         #### TO RUN A DENSITY FIELD TO TEMPERATURE BRIGHTNESS CONVERSION
-#
-#         density3D = jnp.asarray(data)
-#         dens2Tb = Dens2bBatt(density3D, 1, z)
-#         Tb = dens2Tb.temp_brightness
-#         print(Tb)
-#         z_re = dens2Tb.z_re
-#
-#         ####
-#
-#         slice_rho = density3D[:, :, 0]
-#         slice_delta_z = dens2Tb.delta_z[:, :, 0]
-#         slice_Tb = Tb[:, :, 0]
-#
-#         plt.close()
-#         fig, (ax1, ax2) = plt.subplots(ncols=2)
-#         im1 = ax1.imshow(slice_rho)
-#         divider = make_axes_locatable(ax1)
-#         cax1 = divider.append_axes("right", size="5%", pad=0.05)
-#         fig.colorbar(im1, cax=cax1)
-#         ax1.set_title(r"$\delta_{\rho}$" + ", z = {}".format(z))
-#
-#         im2 = ax2.imshow(slice_Tb)
-#         divider = make_axes_locatable(ax2)
-#         cax2 = divider.append_axes("right", size="5%", pad=0.05)
-#         fig.colorbar(im2, cax=cax2)
-#         ax2.set_title(r"$\delta T_b$" + ", z = {}".format(z))
-#         plt.tight_layout(h_pad=1)
-#         fig.savefig("uni_rho_T_b_{}.png".format(z))
-#         plt.close()
+    for z in [7]:
+
+        # dir = "/Users/sabrinaberger/Library/Mobile Documents/com~apple~CloudDocs/CosmicDawn/building/21cmFASTBoxes_{}/PerturbedField_*".format(z)
+        # hf = h5py.File(glob.glob(dir)[0], 'r')
+        # data = hf["PerturbedField/density"]
+        seed = 1010
+        minimizer_functions = jax_main.SwitchMinimizer(seed=seed, z=14, num_bins=128, create_instance=True)
+        density = minimizer_functions.create_better_normal_field(seed=seed).delta_x()
+        print(jnp.shape(density))
+        #### TO RUN A DENSITY FIELD TO TEMPERATURE BRIGHTNESS CONVERSION
+        dens2Tb = Dens2bBatt(density, 1, z, debug=True)
+        Tb = dens2Tb.temp_brightness
+        z_re = dens2Tb.z_re
+        ####
+        # slice_rho = density2D[:, :, 0]
+        # slice_delta_z = dens2Tb.delta_z[:, :, 0]
+        # slice_Tb = Tb[:, :, 0]
+
+        plt.close()
+        fig, (ax1, ax2) = plt.subplots(ncols=2)
+        im1 = ax1.imshow(density)
+        divider = make_axes_locatable(ax1)
+        cax1 = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im1, cax=cax1)
+        ax1.set_title(r"$\delta_{\rho}$" + ", z = {}".format(z))
+
+        im2 = ax2.imshow(Tb)
+        divider = make_axes_locatable(ax2)
+        cax2 = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im2, cax=cax2)
+        ax2.set_title(r"$\delta T_b$" + ", z = {}".format(z))
+        plt.tight_layout(h_pad=1)
+        fig.savefig("uni_rho_T_b_{}.png".format(z))
+        plt.show()
+        plt.close()
+
+        print(jnp.min(Tb))

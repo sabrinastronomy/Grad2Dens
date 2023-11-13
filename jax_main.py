@@ -1,8 +1,9 @@
 """
-Infrastucture to perform efficient, parallelized gradient descent of both included toy models and
-the Battaglia et al. 2013 paper model to generate temperature brightness fields from density fields.
+Infrastucture to perform efficient, parallelized minimization of a likelihood based on
+the Battaglia et al. 2013 paper model to infer density fields from brightness temperatures
 Created October, 2022
-Written by Sabrina Berger and Adrian Liu
+Written by Sabrina Berger
+independent_only_jax function written by Adrian Liu and Adélie Gorce
 """
 
 # import jax related packages
@@ -26,9 +27,10 @@ import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
 from jax_battaglia_full import Dens2bBatt
-# nice publication fonts for plots are implemented when these lines are uncommented
 import matplotlib
+from matplotlib.colors import SymLogNorm
 
+# nice publication fonts for plots are implemented when these lines are uncommented
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
 matplotlib.rcParams['font.family'] = 'STIXGeneral'
 matplotlib.rcParams.update({'font.size': 12})
@@ -42,11 +44,13 @@ matplotlib.rcParams.update({'font.size': 12})
 # grad_tanh = grad(jnp.tanh)
 # print(grad_tanh(110.))
 
-class GradDescent:
+class SwitchMinimizer:
     def __init__(self, seed, z, num_bins, likelihood_off=False, prior_off=False, data=None, truth_field=None, s_field=None, fixed_field=None,
                  noise_off=True, side_length=256, dimensions=2, debug=False,
-                 verbose=False, plot_direc="2D_plots", mask_ionized=False, weighted_prior=False, new_prior=False, old_prior=False, use_truth_mm=False):
+                 verbose=False, plot_direc="2D_plots", mask_ionized=False, weighted_prior=False, new_prior=False, old_prior=False, use_truth_mm=False,
+                 create_instance=False):
         """
+        TODO update
         :param z - the redshift you would like to create your density field at
         :param data (Default: None) - data that you're fitting your field to and will be used in your chi-squared.
                                 If None, the data will be generated from the field meaning you know your truth field
@@ -67,7 +71,6 @@ class GradDescent:
         """
         # checking to make sure one of these three is true
         # assert np.count_nonzero(check_setup_bool_arr) == 1
-
 
         self.seed = seed
         self.z = z
@@ -92,15 +95,12 @@ class GradDescent:
         self.new_prior = new_prior
         self.original_prior = old_prior
         self.use_truth_mm = use_truth_mm
-        # self.start_field_seed = start_field_seed
-
+        self.create_instance = create_instance
 
         ## new stuff
-        # self.large_side_length = self.side_length*2
         self.num_k_modes = self.side_length
         self.resolution = self.side_length / self.num_k_modes # actual length / number of pixels
         self.area = self.side_length**2
-        # self.large_num_k_modes = self.large_side_length // 2
         kmax = 2 * jnp.pi / self.side_length * self.num_k_modes
         self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.side_length, self.z)
         ### get a tuple with the dimensions of the field
@@ -111,6 +111,7 @@ class GradDescent:
         self.total_pixels = self.side_length ** self.dim  # total number of pixels
         ###############################################################################################################
         if self.seed == None:
+            print("Seed is none.")
             return
         ### Debugging setup ###########################################################################################
         if self.debug:
@@ -121,67 +122,58 @@ class GradDescent:
             self.likelihood_indiv_all = np.zeros((self.side_length ** self.dim, 1000))
             self.param_value_all = np.zeros((1000))
         ###############################################################################################################
-
-        ### get *latent space* (z or unbiased field) and *data* only if self.data = None ##############################
+        if self.create_instance:
+            # just getting methods and instance
+            return
+        ### get *latent space* (z or unbiased field) and *data* only if self.data = np.array([None]) ##############################
         if self.data.any() == None and self.truth_field.any() == None:
-            ### 1) create latent space
+            ### 1) create latent space (density field)
             pb_data_unbiased_field = self.create_better_normal_field(seed=self.seed)
             # truth field is just unbiased version made with pbox
-            # self.truth_field = pb_data_unbiased_field.delta_x()[0:self.side_length,0:self.side_length] # cut out size of side length
             self.truth_field = pb_data_unbiased_field.delta_x()
-            # We also need the power spectrum box only for the independent prior To do, should this be biased or unbiased
             if self.original_prior: #old version
-                from matplotlib.colors import SymLogNorm
                 self.fft_truth = self.fft_jax(self.truth_field)
-                # self.pspec_box = jnp.abs(self.fft_truth)**2
-                # pspec, kvals = pbox.get_power(self.truth_field, 150)
-
-                # fig, ax = plt.subplots()
                 self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true, self.side_length, self.z)
-                plt.close()
                 counts, pspec, kvals = self.p_spec_normal(self.pspec_2d_true, 128)
                 mask_kvals = kvals < 1.2
                 counts_func = interpolate.interp1d(kvals[mask_kvals], counts[mask_kvals], fill_value="extrapolate", bounds_error=False)
-                plt.loglog(kvals[mask_kvals], counts[mask_kvals])
-                plt.title("binned counts")
-                plt.savefig("binned.png")
-                plt.show()
+
+                # ensuring there are no 0s in the weights
+                mask_0 = self.kvals_truth == 0
+                self.kvals_truth[mask_0] = 0.01
+                self.weights = jnp.sqrt(counts_func(self.kvals_truth))
+
+                # plt.loglog(kvals[mask_kvals], counts[mask_kvals])
+                # plt.title("binned counts")
+                # plt.savefig("binned.png")
+                # plt.show()
                 # weight trial one
                 # large_k = self.kvals_truth >= 1
                 # small_k = self.kvals_truth < 1
                 # self.kvals_truth[small_k] = 0.1
                 # self.kvals_truth[large_k] = 1
                 # self.weights = self.kvals_truth
-                print("interpolator min k versus pspec min k")
-                print(jnp.min(kvals))
-                print(jnp.min(self.kvals_truth))
-                mask_0 = self.kvals_truth == 0
-                self.kvals_truth[mask_0] = 0.01
-                self.weights = jnp.sqrt(counts_func(self.kvals_truth))
-                plt.close()
-                plt.imshow(self.weights, norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
-                plt.colorbar()
-                plt.title("weights")
-                plt.savefig("weights")
-                print("minimum weights")
-                print(jnp.min(self.weights))
-
-                plt.close()
-                plt.loglog(self.kvals_truth.flatten(), counts_func(self.kvals_truth).flatten())
-                plt.title("interpolated_counts")
-                plt.show()
-                plt.savefig("interpolated_counts")
-
+                # print("interpolator min k versus pspec min k")
+                # print(jnp.min(kvals))
+                # print(jnp.min(self.kvals_truth))
+                # plt.close()
+                # plt.imshow(self.weights, norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
+                # plt.colorbar()
+                # plt.title("weights")
+                # plt.savefig("weights")
+                # print("minimum weights")
+                # print(jnp.min(self.weights))
+                # plt.close()
+                # plt.loglog(self.kvals_truth.flatten(), counts_func(self.kvals_truth).flatten())
+                # plt.title("interpolated_counts")
+                # plt.show()
+                # plt.savefig("interpolated_counts")
 
                 self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_2d_true + 1j * self.pspec_2d_true)
                 self.weights_re, self.weights_im = self.INDICES_independent_only_jax(self.weights) # get im, re of weights
                 self.pspec_indep_nums_re *= self.weights_re
                 self.pspec_indep_nums_im *= self.weights_im
 
-                # mask_0_re_indices = jnp.argwhere(self.pspec_indep_nums_re != -1e8)
-                # mask_0_im_indices = jnp.argwhere(self.pspec_indep_nums_im != -1e8)
-                # self.squeezed_mask_0_re_indices = jnp.squeeze(mask_0_re_indices)
-                # self.squeezed_mask_0_im_indices = jnp.squeeze(mask_0_im_indices)
             elif self.new_prior:
                 counts, self.pspec_box, k_vals_all = self.p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
                 self.truth_final_pspec = self.pspec_true(k_vals_all)
@@ -190,92 +182,34 @@ class GradDescent:
                 exit()
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
+
         else: # data included in initialization of class
-            print("Using previously generated data and truth field.")
+            # print("Using previously generated data and truth field.")
             assert(jnp.shape(self.truth_field)[0] != 0)
             assert(jnp.shape(self.data)[0] != 0)
-            if self.original_prior: #old version
-                from matplotlib.colors import SymLogNorm
-                self.fft_truth = self.fft_jax(self.truth_field)
-                # self.pspec_box = jnp.abs(self.fft_truth)**2
-                # pspec, kvals = pbox.get_power(self.truth_field, 150)
-
-                # fig, ax = plt.subplots()
-                self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true, self.side_length, self.z)
-                plt.close()
-                counts, pspec, kvals = self.p_spec_normal(self.pspec_2d_true, 128)
-                mask_kvals = kvals < 1.2
-                counts_func = interpolate.interp1d(kvals[mask_kvals], counts[mask_kvals], fill_value="extrapolate", bounds_error=False)
-                plt.loglog(kvals[mask_kvals], counts[mask_kvals])
-                plt.title("binned counts")
-                plt.savefig("binned.png")
-                plt.show()
-                # weight trial one
-                # large_k = self.kvals_truth >= 1
-                # small_k = self.kvals_truth < 1
-                # self.kvals_truth[small_k] = 0.1
-                # self.kvals_truth[large_k] = 1
-                # self.weights = self.kvals_truth
-                print("interpolator min k versus pspec min k")
-                print(jnp.min(kvals))
-                print(jnp.min(self.kvals_truth))
-                mask_0 = self.kvals_truth == 0
-                self.kvals_truth[mask_0] = 0.01
-                self.weights = jnp.sqrt(counts_func(self.kvals_truth))
-                plt.close()
-                plt.imshow(self.weights, norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
-                plt.colorbar()
-                plt.title("weights")
-                plt.savefig("weights")
-                print("minimum weights")
-                print(jnp.min(self.weights))
-
-                plt.close()
-                plt.loglog(self.kvals_truth.flatten(), counts_func(self.kvals_truth).flatten())
-                plt.title("interpolated_counts")
-                plt.show()
-                plt.savefig("interpolated_counts")
-
-
-                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_2d_true + 1j * self.pspec_2d_true)
-                self.weights_re, self.weights_im = self.INDICES_independent_only_jax(self.weights) # get im, re of weights
-                self.pspec_indep_nums_re *= self.weights_re
-                self.pspec_indep_nums_im *= self.weights_im
-
-                # mask_0_re_indices = jnp.argwhere(self.pspec_indep_nums_re != -1e8)
-                # mask_0_im_indices = jnp.argwhere(self.pspec_indep_nums_im != -1e8)
-                # self.squeezed_mask_0_re_indices = jnp.squeeze(mask_0_re_indices)
-                # self.squeezed_mask_0_im_indices = jnp.squeeze(mask_0_im_indices)
-            elif self.new_prior:
-                counts, self.pspec_box, k_vals_all = self.p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
-                self.truth_final_pspec = self.pspec_true(k_vals_all)
-
+            print("Not yet implemented")
+            exit()
         ###############################################################################################################
         self.ionized_indices = jnp.argwhere(self.data.flatten() == 0).flatten()
         self.neutral_indices = jnp.argwhere(self.data.flatten() != 0).flatten()
 
         # generate diagonal matrices for chi-squared and adding noise if selected #####################################
-        self.rms = 5
+        self.rms = 0.1
         if not self.noise_off:
-            print("Added noise...")
+            print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
-            self.data = self.data + self.create_jax_normal_field(100)
+            self.data = self.data + self.create_jax_normal_field(100) # 100 is the seed of the noise (same each time)
         self.N_diag = self.rms ** 2 * jnp.ones((self.side_length ** self.dim))
         ###############################################################################################################
 
-        # Generate a starting point field that is just 0.2 * standard deviation of the data if it's not already specified
+        # Generate a starting point field that is just 0.2 * rms of the data if it's not already specified
         if self.s_field == None:
             print("CREATING NEW STARTING FIELD.")
-            self.rms = 1
             # starting guess, using a powerbox field without flat pspec
-            self.s_field_original = self.create_normal_field(scale_num=0.1)
-            # self.s_field_original = self.create_better_normal_field(self.start_field_seed).delta_x()
+            self.s_field_original = self.create_normal_field(scale_num=0.2)
             self.s_field = jnp.asarray(self.s_field_original.flatten())
-            # self.check_field(self.s_field_original, "starting field", show=False)
 
         ###############################################################################################################
-        # if self.
-        #     self.run_grad_descent()
 
     def create_normal_field(self, scale_num):
         """This method creates a numpy random field and converts it to a Jax array"""
@@ -287,7 +221,6 @@ class GradDescent:
         seed = jax.random.PRNGKey(seed)
         return jax.random.normal(seed, shape=self.size)
 
-
     def rerun(self, likelihood_off, prior_off, mask_ionized):
         self.mask_ionized = mask_ionized
         self.likelihood_off = likelihood_off
@@ -295,15 +228,12 @@ class GradDescent:
         # sets starting field as best old field
         if self.verbose:
             print("USING OLD STARTING FIELD.")
-
         self.s_field = jnp.copy(self.best_field_reshaped).flatten()
-
         if self.mask_ionized:
             self.preserve_original = jnp.copy(self.s_field)
         self.run_grad_descent()
 
     def run_grad_descent(self):
-        ### only works for first
         # Start gradient descent ######################################################################################
         self.opt_result = self.differentiate_2D_func()
         self.best_field = self.opt_result.flatten()
@@ -337,24 +267,6 @@ class GradDescent:
         pspec /= area
         return counts, pspec, kvals
 
-    def p_spec_pre(self, field, nbins):
-        """
-        square after averaging (histograming)
-        """
-        fft_data = jnp.fft.fftshift(jnp.fft.fftn(jnp.fft.ifftshift(field)))
-        fft_data = jnp.abs(fft_data)
-        k_arr = jnp.fft.fftshift(jnp.fft.fftfreq(self.side_length)) * 2 * jnp.pi
-        k1, k2 = jnp.meshgrid(k_arr, k_arr)
-        k_mag_full = jnp.sqrt(k1 ** 2 + k2 ** 2)
-
-        counts, bin_edges = jnp.histogram(k_mag_full, nbins)
-        binned_fft, _ = jnp.histogram(k_mag_full, nbins, weights=fft_data)
-        kvals = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        pspec = binned_fft**2 / counts / (self.side_length ** 2)
-        return counts, pspec, kvals
-
-
-
     def differentiate_2D_func(self):
         ## field should already be flattened here
         func = self.chi_sq_jax
@@ -378,7 +290,6 @@ class GradDescent:
         # print("Was it successful?")
         # print(opt_result.success)
         # return opt_result.x
-
         #######
 
         # opt_result = jaxopt.ScipyMinimize(method="l-bfgs-b", fun=func, tol=1e-12)
@@ -472,9 +383,10 @@ class GradDescent:
             prior = real_prior + imag_prior
         elif self.new_prior and self.likelihood_off:
             counts, power_curr, k_values = self.p_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
-            sigma = counts**2
+            # sigma = counts**2
             x = (self.truth_final_pspec - power_curr).flatten()
-            prior = jnp.dot(x**2, 1/sigma)
+            # prior = jnp.dot(x**2, 1/sigma)
+            prior = np.sum(x**2)
 
 
         if self.debug:
@@ -539,8 +451,7 @@ class GradDescent:
 
     def create_better_normal_field(self, seed):
         if self.use_truth_mm:
-
-
+            print("Using truth matter power spectrum to generate field.")
             # def pspecify(k):
             #     k_shape = jnp.shape(k)
             #     if len(k_shape) < 1:
@@ -558,8 +469,8 @@ class GradDescent:
                 dim=self.dim,  # dimension of box
                 pk=self.pspec_true,  # The power-spectrum
                 boxlength=self.side_length,  # Size of the box (sets the units of k in pk)
-                seed=seed,  # Use the same seed as our powerbox
-                ensure_physical=True
+                seed=seed  # Use the same seed as our powerbox
+                # ensure_physical=True
             )
         else:
             ## should only be used for setting an initial test field
@@ -586,7 +497,7 @@ class GradDescent:
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
 
-        if False:
+        if self.debug:
             plt.close()
             plt.imshow(batt_model_instance.X_HI)
             plt.title("X_HI")
@@ -633,7 +544,7 @@ class GradDescent:
 
     def INDICES_independent_only_jax(self, box):
         """
-        This takes an array and gets the independent parts without taking the real or imaginary parts of them
+        This takes an array and gets the independent parts by index without taking the real or imaginary parts of them
         """
         assert(len(jnp.shape(box)) > 1)
         N = box.shape[0]
@@ -710,53 +621,3 @@ class GradDescent:
                 plt.savefig(f"{self.plot_direc}/plots/pixel_num_{i}_check.png")
                 plt.close()
 
-    def check_field(self, field, title, normalize=False, save=True, show=False, iteration_number=-1):
-        # plotting
-        plt.close()
-        if normalize:
-            field = (field - jnp.min(field)) / (jnp.max(field) - jnp.min(field))
-        if field.ndim < 2:
-            plt.plot(field)
-        else:
-            plt.imshow(field, norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
-            plt.colorbar()
-            plt.clim(-1, 16)
-
-        if iteration_number >= 0:
-            t = plt.text(20, 240, f"Iteration #{iteration_number} with " + title)
-            t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-        else:
-            t = plt.text(20, 240, "z = " + str(self.z) + " " + title)
-            t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-
-        plt.tight_layout()
-        if save:
-            if iteration_number >= 0:
-                # plt.clim(-1, jnp.max(self.truth_field))
-                plt.savefig(f"{self.plot_direc}/plots/" + f"iter_num_{iteration_number}_" + f"{self.z}" + "_battaglia.png")
-            else:
-                plt.savefig(f"{self.plot_direc}/plots/" + f"{title}_{self.z}" + "_battaglia.png")
-
-        if show:
-            plt.show()
-        plt.close()
-
-    def plot_3_panel(self):
-        """This method gives a nice three panel plot showing the data, predicted field, and truth field"""
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 4))
-        im1 = ax1.imshow(self.data)
-        ax1.set_title("Observed data")
-        im2 = ax2.imshow(self.result)
-        ax2.set_title("Inferred density")
-        im3 = ax3.imshow(self.truth_field)
-        ax3.set_title("Truth")
-        fig.tight_layout()
-        fig.colorbar(im1, ax=ax1)
-        fig.colorbar(im2, ax=ax2)
-        fig.colorbar(im3, ax=ax3)
-        ## getting plot title
-        if self.noise_off:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.z}_no_noise_.png", dpi=300)
-        else:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.z}_w_noise.png", dpi=300)
-        plt.close()

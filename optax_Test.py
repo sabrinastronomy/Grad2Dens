@@ -9,7 +9,6 @@ from jax.experimental.host_callback import id_print  # this is a way to print in
 
 NUM_TRAIN_STEPS = 1_000
 
-
 holder = GradDescent(12, include_field=True, autorun=False, plot_direc="optax_plots")
 holder.check_field(holder.truth_field, "truth_field", show=True, save=True)
 holder.check_field(holder.data, "truth_field", show=True, save=True)

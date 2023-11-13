@@ -67,18 +67,6 @@ def get_truth_matter_pspec(kmax, side_length, z):
     )
     pspec_k_func = lambda k: interp_l.P(z, k) / side_length
     return pspec_k_func
-    # k_arr = np.fft.fftshift(np.fft.fftfreq(side_length)) * 2 * np.pi
-    # k1, k2 = np.meshgrid(k_arr, k_arr)
-    # k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
-    #
-    # xp = k_mag_full.flatten()
-    # fp = pspec_k_func(z=z, k=xp).squeeze()
-    # print("shape of fp")
-    # print(np.shape(fp))
-    # print("shape of xp")
-    # print(np.shape(xp))
-    # print("THIS IS 2D ")
-    # return xp, fp
 
 def convert_pspec_2_2D(power_spectrum, num_k_modes, z):
     p_spec_2D = np.empty((num_k_modes, num_k_modes))
@@ -100,7 +88,7 @@ def convert_pspec_2_2D(power_spectrum, num_k_modes, z):
 
 
 if __name__ == "__main__":
-    larger_side_length = larger_num_k_modes = 512
+    larger_side_length = larger_num_k_modes = 256
     # num_k_modes = 128
     # larger_num_k_modes = larger_side_length // 2
     dim = 2
@@ -111,38 +99,23 @@ if __name__ == "__main__":
     k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
 
     kmax = 2*np.pi / larger_side_length * larger_num_k_modes
-    pspec_true_xp, pspec_true_fp = get_truth_matter_pspec(kmax, larger_side_length, z)
+    pspec_k_func = get_truth_matter_pspec(kmax, larger_side_length, z)
 
-    def pspecify(k):
-        k_shape = np.shape(k)
-        print("k shape")
-        print(k_shape)
-        if k.ndim < 2:
-            return np.interp(np.asarray([k]), pspec_true_xp, pspec_true_fp)
-        k = k.flatten()
-        power_flat = np.interp(k, pspec_true_xp, pspec_true_fp)
-        power_flat = np.reshape(power_flat, k_shape)
-        return power_flat
 
-    plt.close()
-    plt.loglog(pspec_true_xp, pspec_true_fp, label="points")
-    plt.loglog(k_mag_full.flatten(), pspecify(k_mag_full).flatten())
-    plt.legend()
-    plt.show()
-
-    pb = pbox.LogNormalPowerBox(
-        N=larger_side_length,  # number of wavenumbers, and pixels
+    pb = pbox.PowerBox(
+        N=larger_side_length // 2,  # number of wavenumbers, and pixels
         dim=dim,  # dimension of box
-        pk=pspecify,  # The power-spectrum
-        boxlength=larger_side_length//2,  # Size of the box (sets the units of k in pk)
+        pk=pspec_k_func,  # The power-spectrum
+        boxlength=larger_side_length,  # Size of the box (sets the units of k in pk)
         seed=1010,  # Use the same seed as our powerbox
-        ensure_physical=True
+        # ensure_physical=True
     )
+
     resolution = larger_side_length / larger_num_k_modes
     area = larger_side_length**2
     # cut_out = pb.delta_x()[0:side_length, 0:side_length]
     p_k_field, bins_field = pbox.get_power(pb.delta_x(), boxlength=larger_side_length)
-    p_spec_cmb = pspecify(bins_field)
+    p_spec_cmb = pspec_k_func(bins_field)
     _, pspec_own, kvals_own = p_spec_normal(pb.delta_x(), 128, resolution, area)
     # _, pspec_own_small, kvals_own_small = p_spec_normal(cut_out, 128, resolution, area)
 
@@ -160,6 +133,7 @@ if __name__ == "__main__":
     plt.close()
     plt.imshow(pb.delta_x())
     plt.title("truth field")
+    plt.colorbar()
     plt.show()
     #
     # cut_out = pb.delta_x()[0:side_length, 0:side_length]
