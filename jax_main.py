@@ -19,7 +19,7 @@ from jax.scipy.optimize import \
 # from jax.example_libraries import optimizers as jaxopt
 import jaxopt
 import theory_matter_ps
-from theory_matter_ps import circular_spec_normal
+from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 # config.update('jax_disable_jit', True) # this turns off jit compiling which is helpful for debugging
@@ -151,7 +151,11 @@ class SwitchMinimizer:
                 # self.pspec_indep_nums_im *= self.weights_im
 
             elif self.new_prior:
-                counts, self.pspec_box, k_vals_all = circular_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
+                if self.dim == 2:
+                    counts, self.pspec_box, k_vals_all = circular_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
+                if self.dim == 3:
+                    counts, self.pspec_box, k_vals_all = spherical_p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
+
                 plt.close()
                 plt.scatter(k_vals_all, counts)
                 plt.xlabel("k vals")
@@ -367,14 +371,18 @@ class SwitchMinimizer:
             prior = real_prior + imag_prior
 
         elif self.new_prior:
-            counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
+            if self.dim == 2:
+                counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
+            elif self.dim == 3:
+                counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
+
             # sigma = counts**2
             x = (self.truth_final_pspec - power_curr).flatten()
             # prior = jnp.dot(x**2, 1/sigma)
             prior = np.sum(x**2)
-            sig = jnp.full_like(candidate_field, 0.1)
-            prior_gauss = jnp.dot(candidate_field**2, 1/sig)
-            prior += prior_gauss
+            # sig = jnp.full_like(candidate_field, 0.1)
+            # prior_gauss = jnp.sum(jnp.dot(candidate_field**2, 1/sig))
+            # prior += prior_gauss
             # plt.close()
             # plt.title("individual candidate")
             # plt.plot(k_values, self.weights)
@@ -383,6 +391,7 @@ class SwitchMinimizer:
 
 
         if self.likelihood_off:
+            # likelihood = 10**-2 *  likelihood
             likelihood = 0
         elif self.prior_off:
             prior = 0
