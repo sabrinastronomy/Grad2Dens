@@ -19,7 +19,7 @@ from jax.scipy.optimize import \
 # from jax.example_libraries import optimizers as jaxopt
 import jaxopt
 import theory_matter_ps
-from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal
+from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal, after_spherical_p_spec_normal
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 # config.update('jax_disable_jit', True) # this turns off jit compiling which is helpful for debugging
@@ -104,6 +104,7 @@ class SwitchMinimizer:
         self.resolution = self.side_length / self.physical_side_length # number of pixels / physical side length
 
         self.area = self.side_length**2
+        self.volume = self.side_length**3
         # kmax = 2 * jnp.pi / self.physical_side_length * (self.side_length / 2)
         kmax = 50
         self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.physical_side_length, self.z, self.dim)
@@ -154,23 +155,23 @@ class SwitchMinimizer:
                 if self.dim == 2:
                     counts, self.pspec_box, k_vals_all = circular_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
                 if self.dim == 3:
-                    counts, self.pspec_box, k_vals_all = spherical_p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
+                    counts, self.pspec_box, k_vals_all = spherical_p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.volume)
 
                 plt.close()
                 plt.scatter(k_vals_all, counts)
                 plt.xlabel("k vals")
                 plt.ylabel("counts")
                 plt.xscale("log")
-                plt.show()
+                plt.savefig("kvals.png")
                 plt.close()
-                self.weights = np.full_like(counts, 0.2)
-                self.weights[k_vals_all > 12] = 1
+                # self.weights = np.full_like(counts, 0.2)
+                # self.weights[k_vals_all > 12] = 1
                 self.truth_final_pspec = self.pspec_true(k_vals_all)
                 plt.close()
                 plt.loglog(k_vals_all, self.truth_final_pspec, label="cmb generated")
                 plt.loglog(k_vals_all, self.pspec_box, label="pspec of truth")
                 plt.legend()
-                plt.show()
+                plt.savefig("pspec.png")
                 plt.close()
 
 
@@ -256,7 +257,7 @@ class SwitchMinimizer:
         self.best_field = self.opt_result.flatten()
         if self.mask_ionized:
             # put back the ionized regions which are the only things allowed to change
-            assert jnp.shape(self.best_field) == (self.side_length**2,)
+            assert jnp.shape(self.best_field) == (self.side_length**self.dim,)
             self.preserve_original = self.preserve_original.at[self.ionized_indices].set(self.best_field[self.ionized_indices])
             self.best_field_reshaped = jnp.array(jnp.reshape(self.preserve_original, self.size))
         else:
@@ -305,6 +306,8 @@ class SwitchMinimizer:
         # jaxopt.LBFGS.stop_if_linesearch_fails = True
         # , options = {"maxiter": 1e100, "maxls": 1e100})
         opt_result = jaxopt.LBFGS(fun=self.chi_sq_jax, tol=1e-12, maxiter=1000, maxls=1000, stop_if_linesearch_fails=True)
+        print("s_field")
+        id_print(self.s_field)
         params, state = opt_result.run(self.s_field)
         self.final_func_val = state.value
 
@@ -330,8 +333,8 @@ class SwitchMinimizer:
             copy_guess = jnp.copy(guess.flatten())
             full_guess = jnp.copy(self.preserve_original.flatten())
 
-            assert jnp.shape(copy_guess) == (self.side_length**2,)
-            assert jnp.shape(full_guess) == (self.side_length**2,)
+            assert jnp.shape(copy_guess) == (self.side_length**self.dim,)
+            assert jnp.shape(full_guess) == (self.side_length**self.dim,)
 
             full_guess = full_guess.at[self.ionized_indices].set(copy_guess[self.ionized_indices])
             candidate_field = jnp.reshape(full_guess, self.size)
@@ -368,16 +371,24 @@ class SwitchMinimizer:
             imag_prior = jnp.dot(fourier_nums_imag**2,
                         2 / self.pspec_indep_nums_im)  # Half variance for imag
 
-            prior = real_prior + imag_prior
+            prior = (real_prior + imag_prior) / self.side_length**self.dim
+
 
         elif self.new_prior:
             if self.dim == 2:
                 counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
             elif self.dim == 3:
-                counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
+                counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.volume)
+                after_counts, after_power_curr, after_k_values = after_spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.volume)
 
             # sigma = counts**2
             x = (self.truth_final_pspec - power_curr).flatten()
+            # weights = jnp.sqrt((power_curr - after_power_curr)/counts)
+
+            # print("after_power_curr")
+            # id_print(after_power_curr)
+            # print("weights")
+            # id_print(weights)
             # prior = jnp.dot(x**2, 1/sigma)
             prior = np.sum(x**2)
             # sig = jnp.full_like(candidate_field, 0.1)
@@ -416,6 +427,7 @@ class SwitchMinimizer:
             #     prior_extra = 1e5
             # self.likelihood = likelihood
             # self.prior = prior
+
         self.final_likelihood_prior = likelihood + prior
 
         if self.verbose:

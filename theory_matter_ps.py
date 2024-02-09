@@ -104,7 +104,7 @@ def spherical_p_spec_normal(field, nbins, resolution, volume):
     """
     curr_side_length = np.shape(field)[0]
     fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
-    fft_data_squared = fft_data * np.conj(fft_data)
+    fft_data_squared = np.abs(fft_data**2)
     k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
     k_arr *= resolution
     k1, k2, k3 = np.meshgrid(k_arr, k_arr, k_arr) # 3D!! meshgrid :)
@@ -113,13 +113,38 @@ def spherical_p_spec_normal(field, nbins, resolution, volume):
     counts, bin_edges = np.histogram(k_mag_full, nbins)
     binned_power, _ = np.histogram(k_mag_full, nbins, weights=fft_data_squared)
 
-    kvals = 0.5 * (bin_edges[:-1] + bin_edges[1:]) # center of bins
+    bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
+                 np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
     pspec = binned_power / counts # average power in each bin
-    print(f"resolution, {resolution} pixels/mpc") # pixels/mpc
+    # print(f"resolution, {resolution} pixels/mpc") # pixels/mpc
     pspec /= volume
     pspec *= (1/resolution)**3 # converting form pixels^3 to Mpc^3
-    print("PLEASE CHECK THIS")
-    return counts, pspec, kvals
+    # print("PLEASE CHECK THIS")
+    return counts, pspec, bin_means
+
+def after_spherical_p_spec_normal(field, nbins, resolution, volume):
+    """
+    square after averaging (histogramming)
+    """
+    curr_side_length = np.shape(field)[0]
+    fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
+    fft_data_squared = np.abs(fft_data)
+    k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
+    k_arr *= resolution
+    k1, k2, k3 = np.meshgrid(k_arr, k_arr, k_arr) # 3D!! meshgrid :)
+    k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2 + k3 ** 2)
+
+    counts, bin_edges = np.histogram(k_mag_full, nbins)
+    binned_power, _ = np.histogram(k_mag_full, nbins, weights=fft_data_squared)
+
+    bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
+                 np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
+    pspec = binned_power**2 / counts # average power in each bin
+    # print(f"resolution, {resolution} pixels/mpc") # pixels/mpc
+    pspec /= volume
+    pspec *= (1/resolution)**3 # converting form pixels^3 to Mpc^3
+    # print("PLEASE CHECK THIS")
+    return counts, pspec, bin_means
 
 def get_truth_matter_pspec(kmax, side_length, z, dim):
     # Initialise CAMB object
@@ -214,7 +239,7 @@ if __name__ == "__main__":
         print(np.max(bins_field))
 
         p_spec_cmb = pspec_k_func(bins_field)
-        _, pspec_own, kvals_own = spherical_p_spec_normal(pb.delta_x(), 64, resolution, volume_pixels)
+        counts, pspec_own, kvals_own = spherical_p_spec_normal(pb.delta_x(), 64, resolution, volume_pixels)
 
         plt.title(f"physics side length = {physical_side_length}, number of pixels = {pixel_side_length}")
         plt.loglog(bins_field, p_k_field, label=rf'powerbox (large box)', c="m")
@@ -228,8 +253,11 @@ if __name__ == "__main__":
         plt.imshow(pb.delta_x()[0, :, :])
         plt.title("truth field")
         plt.colorbar()
-        plt.show()
+        plt.savefig("truth_field.png")
+        plt.close()
 
+        plt.plot(kvals_own, counts)
+        plt.savefig("counts.png")
 
     if dim == 2:
         # no_shift_k = np.fft.fftfreq(pixel_side_length)
@@ -297,7 +325,12 @@ if __name__ == "__main__":
         p_spec_cmb = pspec_k_func(bins_field)
         num_bins = len(bins_field)
 
-        _, pspec_own, kvals_own = circular_spec_normal(pb.delta_x(), num_bins, resolution, area)
+        counts, pspec_own, kvals_own = circular_spec_normal(pb.delta_x(), num_bins, resolution, area)
+
+        plt.plot(kvals_own,counts)
+        plt.savefig("counts.png")
+        plt.close()
+
         batt_model_instance = Dens2bBatt(pb.delta_x(), delta_pos=1, set_z=7, flow=True, resolution=resolution)
 
         plt.title(f"physical side length = {physical_side_length}, number of pixels = {pixel_side_length}")

@@ -71,9 +71,14 @@ class Dens2bBatt:
         elif self.three_d: # assuming 3D
             self.cube_len = len(self.density[:, 0, 0])
             self.integrand = self.density * (self.delta_pos**3) # weird FFT scaling for 3D
-            self.kx = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[0], self.delta_pos))
-            self.ky = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[1], self.delta_pos))
-            self.kz = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[2], self.delta_pos))
+
+            self.kx = jnp.fft.fftfreq(self.density.shape[0]) * resolution # convert from 1/pixel to 1/Mpc by multiplying by pixel/Mpc
+            self.ky = jnp.fft.fftfreq(self.density.shape[1]) * resolution# TO DO check
+            self.kz = jnp.fft.fftfreq(self.density.shape[2]) * resolution# TO DO check
+
+            # self.kx = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[0], self.delta_pos))
+            # self.ky = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[1], self.delta_pos))
+            # self.kz = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[2], self.delta_pos))
 
             self.kx *= 2 * jnp.pi  # scaling k modes correctly
             self.ky *= 2 * jnp.pi  # scaling k modes correctly
@@ -118,7 +123,6 @@ class Dens2bBatt:
 
 
     def apply_filter(self):
-        w_z = 1 # debug
         w_z = self.b_mz(self.k_mags * self.delta_pos)
 
         self.density_k *= w_z
@@ -167,6 +171,9 @@ class Dens2bBatt:
         elif self.two_d:
             # vectorized version
             self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+        elif self.three_d:
+            self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+
         else:
             raise NotImplementedError
         return self.X_HI

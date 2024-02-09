@@ -13,7 +13,7 @@ from matplotlib.ticker import MaxNLocator
 from jax_battaglia_full import Dens2bBatt
 import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import circular_spec_normal
+from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal
 
 from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are precompiled
 
@@ -58,11 +58,11 @@ class InferDens(SwitchMinimizer):
         self.labels = []
 
         if plot_direc == "":
-            perc_ionized = round(len(self.ionized_indices) / self.side_length**2, 1)
+            perc_ionized = round(len(self.ionized_indices) / self.side_length**self.dim, 1)
             if old_prior:
-                new_direc = f"z_{self.z}_perc_ionized_{perc_ionized}_old_seed_{seed}_bins_{num_bins}"
+                new_direc = f"{self.dim}D_z_{self.z}_perc_ionized_{perc_ionized}_old_seed_{seed}_bins_{num_bins}"
             elif new_prior:
-                new_direc = f"z_{self.z}_perc_ionized_{perc_ionized}_seed_{seed}_bins_{num_bins}"
+                new_direc = f"{self.dim}D_z_{self.z}_perc_ionized_{perc_ionized}_seed_{seed}_bins_{num_bins}"
 
             if self.truth_field.any() != None:
                 new_direc = f"z_{self.z}_diff_start_" + new_direc
@@ -215,8 +215,15 @@ class InferDens(SwitchMinimizer):
     def plot_pspecs(self):
         labels = np.load(self.plot_direc + f"/npy/labels.npy")
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.z}.npy")
-        self.num_k_modes = self.side_length
-        _, pspec_truth, kvals = circular_spec_normal(truth_field, self.num_bins, self.resolution, self.area)
+        if self.dim == 3:
+            truth_field_full = np.copy(truth_field)
+            truth_field = truth_field[10, :, :]
+        self.num_k_modes = self.num_bins
+        if self.dim == 2:
+            _, pspec_truth, kvals = circular_spec_normal(truth_field, self.num_bins, self.resolution, self.area)
+        elif self.dim == 3:
+            _, pspec_truth, kvals = spherical_p_spec_normal(truth_field_full, self.num_bins, self.resolution, self.volume)
+
         fig_pspec, axes_pspec = plt.subplots(2, 1, sharex=True, gridspec_kw={'height_ratios': [3, 1]})
         fig_pspec.subplots_adjust(hspace=0)
 
@@ -225,10 +232,14 @@ class InferDens(SwitchMinimizer):
         axes_pspec[0].set_xticklabels([])  # Remove x-tic labels for the first frame
         axes_pspec[0].set_yticklabels([])  # Remove y-tic labels for the first frame
 
-        for i, k in enumerate([0, 1, 3]):
+        for i, k in enumerate([0, 1, 2]):
             label = labels[k].replace("_", " ")
             best_field = np.load(self.plot_direc + f"/npy/best_field_{self.z}_{k}.npy")
-            counts, pspec_normal, kvals = circular_spec_normal(best_field, self.num_bins, self.resolution, self.area)
+            if self.dim == 2:
+                counts, pspec_normal, kvals = circular_spec_normal(best_field, self.num_bins, self.resolution, self.area)
+            elif self.dim == 3:
+                counts, pspec_normal, kvals = spherical_p_spec_normal(best_field, self.num_bins, self.resolution, self.volume)
+
             # counts, pspec_pre, kvals = self.p_spec_pre(best_field, self.num_bins)
             # poisson_rms = np.sqrt(np.abs(pspec_normal - pspec_pre)) / np.sqrt(counts)
             # print(poisson_rms)
@@ -253,14 +264,19 @@ class InferDens(SwitchMinimizer):
 
     def plot_panel(self, tick_font_size=7, normalize=False):
         figsize = (8, 12)
-        rows = self.iter_num_max // 2
+        rows = 2
         cols = 2
 
         if normalize:
             truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.z}.npy")
         else:
-            self.truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.z}.npy")
-            self.data = np.load(self.plot_direc + f"/npy/data_field_{self.z}.npy")
+            truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.z}.npy")
+            data = np.load(self.plot_direc + f"/npy/data_field_{self.z}.npy")
+
+        if self.dim == 3:
+            truth_field = truth_field[10, :, :]
+            data = data[10, :, :]
+
 
         data_fig, data_axes = plt.subplots(rows, cols, figsize=figsize)
         residuals_fig, residuals_axes = plt.subplots(rows, cols, figsize=figsize)
@@ -281,32 +297,32 @@ class InferDens(SwitchMinimizer):
                         axes[i][j].set_xlim(-10**1, 10**2)
                         continue
                     else:
-                        im = axes[i][j].imshow(self.truth_field, norm=matplotlib.colors.SymLogNorm(linthresh=0.01)) #, vmin=-1, vmax=np.max(self.truth_field)))
+                        im = axes[i][j].imshow(truth_field, norm=matplotlib.colors.SymLogNorm(linthresh=0.01)) #, vmin=-1, vmax=np.max(self.truth_field)))
                         divider = make_axes_locatable(axes[i][j])
                         cax = divider.append_axes('bottom', size='5%', pad=0.05)
                         cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                         cbar.ax.tick_params(labelsize=tick_font_size)
-                        t = axes[i][j].text(20, 220, f"Truth Field", color="black", weight='bold')
+                        t = axes[i][j].text(20, 150, f"Truth Field", color="black", weight='bold')
                         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                         axes[i][j].set_xticks([])
                         axes[i][j].set_aspect('equal')
 
-                        im = data_axes[i][j].imshow(self.data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)))
+                        im = data_axes[i][j].imshow(data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(data)))
                         divider = make_axes_locatable(data_axes[i][j])
                         cax = divider.append_axes('bottom', size='5%', pad=0.05)
                         cbar = data_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                         cbar.ax.tick_params(labelsize=tick_font_size)
-                        t = data_axes[i][j].text(20, 220, f"Truth Data", color="black", weight='bold')
+                        t = data_axes[i][j].text(20, 150, f"Truth Data", color="black", weight='bold')
                         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                         data_axes[i][j].set_xticks([])
                         data_axes[i][j].set_aspect('equal')
 
-                        im = residuals_axes[i][j].imshow(np.zeros_like(self.truth_field), norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
+                        im = residuals_axes[i][j].imshow(np.zeros_like(truth_field), norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
                         divider = make_axes_locatable(residuals_axes[i][j])
                         cax = divider.append_axes('bottom', size='5%', pad=0.05)
                         cbar = residuals_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                         cbar.ax.tick_params(labelsize=tick_font_size)
-                        t = residuals_axes[i][j].text(20, 220, f"Zero Residuals", color="black", weight='bold')
+                        t = residuals_axes[i][j].text(20, 150, f"Zero Residuals", color="black", weight='bold')
                         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                         residuals_axes[i][j].set_xticks([])
                         residuals_axes[i][j].set_aspect('equal')
@@ -314,6 +330,9 @@ class InferDens(SwitchMinimizer):
                         continue
 
                 best_field = np.load(self.plot_direc + f"/npy/best_field_{self.z}_{k}.npy")
+                if self.dim == 3:
+                    # getting slice
+                    best_field = best_field[10, :, :]
                 if normalize:
                     hist, bin_edges = np.histogram(best_field, bins=1000)
                     axes[i][j].plot(bin_edges[1:], hist)
@@ -321,24 +340,24 @@ class InferDens(SwitchMinimizer):
                     axes[i][j].set_xlabel("density")
                     axes[i][j].set_xlim(-10**1, 10 **2)
                 else:
-                    im = axes[i][j].imshow(best_field,norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmax=0.1)) #, vmin=-1, vmax=jnp.max(self.truth_field)))
+                    im = axes[i][j].imshow(best_field, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmax=0.1)) #, vmin=-1, vmax=jnp.max(self.truth_field)))
                     divider = make_axes_locatable(axes[i][j])
                     cax = divider.append_axes('bottom', size='5%', pad=0.05)
                     cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                     cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = axes[i][j].text(20, 220, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
+                    t = axes[i][j].text(20, 150, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
                     t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                     axes[i][j].set_xticks([])
                     axes[i][j].set_aspect('equal')
 
-                    residual = best_field - self.truth_field
-                    im = residuals_axes[i][j].imshow(best_field - self.truth_field,
+                    residual = best_field - truth_field
+                    im = residuals_axes[i][j].imshow(best_field - truth_field,
                                                      norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
                     divider = make_axes_locatable(residuals_axes[i][j])
                     cax = divider.append_axes('bottom', size='5%', pad=0.05)
                     cbar = residuals_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                     cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = residuals_axes[i][j].text(20, 220, f"(Current-Truth) Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
+                    t = residuals_axes[i][j].text(20, 150, f"(Current-Truth) Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
                     t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                     residuals_axes[i][j].set_xticks([])
                     residuals_axes[i][j].set_aspect('equal')
@@ -350,7 +369,7 @@ class InferDens(SwitchMinimizer):
                     cax = divider.append_axes('bottom', size='5%', pad=0.05)
                     cbar = data_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
                     cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = data_axes[i][j].text(20, 220, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
+                    t = data_axes[i][j].text(20, 150, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
                     t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
                     data_axes[i][j].set_xticks([])
                     data_axes[i][j].set_aspect('equal')
@@ -372,13 +391,21 @@ class InferDens(SwitchMinimizer):
 
     def calc_prior_likelihood(self, field):
         field = jnp.reshape(field, self.size)
-        assert np.shape(field) == (self.side_length, self.side_length)
+        if self.dim == 3:
+            assert np.shape(field) == (self.side_length, self.side_length, self.side_length)
+        elif self.dim == 2:
+            assert np.shape(field) == (self.side_length, self.side_length)
+        else:
+            exit()
         # note param_init was passed in and is a constant
         discrepancy = self.data - self.bias_field(field)
         likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
         #### prior
         if self.new_prior:
-            counts, power_curr, _ = circular_spec_normal(field, self.num_bins, self.resolution, self.area)
+            if self.dim == 2:
+                counts, power_curr, _ = circular_spec_normal(field, self.num_bins, self.resolution, self.area)
+            elif self.dim == 3:
+                counts, power_curr, _ = spherical_p_spec_normal(field, self.num_bins, self.resolution, self.volume)
             # sigma = counts ** 2
             x = (self.pspec_box - power_curr).flatten()
             prior = np.sum(x**2)
@@ -483,6 +510,9 @@ class InferDens(SwitchMinimizer):
 
     def check_field(self, field, title, normalize=False, save=True, show=False, iteration_number=-1):
         # plotting
+        if self.dim == 3:
+            # take slice of field
+            field = field[10, :, :]
         fig, axes = plt.subplots()
         if normalize:
             field = (field - jnp.min(field)) / (jnp.max(field) - jnp.min(field))
@@ -518,7 +548,7 @@ class InferDens(SwitchMinimizer):
 if __name__ == "__main__":
     print("starting")
     samp = InferDens(seed=1010, z=7, truth_field=np.array([None]), brightness_temperature_field=np.array([None]),
-                     num_bins=113, mask_ionized=False, iter_num_max=4, side_length=512, physical_side_length=256,
+                     dimensions=3, num_bins=64, mask_ionized=False, iter_num_max=3, side_length=128, physical_side_length=64,
                      plot_direc="", run_optimizer=True, weighted_prior=False, new_prior=True,
                      old_prior=False, nothing_off=False, verbose=False,
                      debug=False, use_truth_mm=True, noise_off=True)
