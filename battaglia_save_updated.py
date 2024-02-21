@@ -1,6 +1,9 @@
+## This version
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
+import jax
 from scipy.special import spherical_jn as j_bessel
+from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are preself.compiledd
 
 # Toy Density Field
 # nx, ny = (5, 5)
@@ -15,12 +18,9 @@ class Dens2bBatt:
     """
     This class follows the Battaglia et al (2013) model to go from a density field to a temperature brightness field.
     """
-    def __init__(self, density, delta_pos, set_z, flow=True, debug=False, b_0=0.593, alpha=0.564, k_0=0.185): # , b_0=0.593, alpha=0.564, k_0=0.185):
+    def __init__(self, density, delta_pos, set_z, resolution, flow=True, debug=False):
         # go into k-space
         self.debug = debug
-        self.b_0 = b_0
-        self.alpha = alpha
-        self.k_0 = k_0
         if density.ndim == 1:
             self.one_d = True
             self.two_d = False
@@ -37,9 +37,12 @@ class Dens2bBatt:
             print("Unsupported field dimensions!")
             exit()
 
+        if debug:
+            print(f"Density dimensions are {density.ndim}")
         self.density = density
         self.set_z = set_z
         self.delta_pos = delta_pos  # Mpc
+        self.resolution = resolution
 
         if self.one_d:
             self.cube_len = len(self.density)
@@ -52,11 +55,17 @@ class Dens2bBatt:
         elif self.two_d: # assuming 2D
             self.cube_len = len(self.density[:, 0])
             self.integrand = self.density * (self.delta_pos**2) # weird FFT scaling for 2D
-            self.kx = jnp.fft.fftfreq(self.density.shape[0], self.delta_pos)
-            self.ky = jnp.fft.fftfreq(self.density.shape[1], self.delta_pos)
+            # self.kx = jnp.fft.fftfreq(self.density.shape[0], self.delta_pos)
+            # self.ky = jnp.fft.fftfreq(self.density.shape[1], self.delta_pos)
+
+            self.kx = jnp.fft.fftfreq(self.density.shape[0]) * resolution # convert from 1/pixel to 1/Mpc by multiplying by pixel/Mpc
+            self.ky = jnp.fft.fftfreq(self.density.shape[1]) * resolution# TO DO check
+
             self.kx *= 2 * jnp.pi  # scaling k modes correctly
             self.ky *= 2 * jnp.pi  # scaling k modes correctly
             self.k_mags = jnp.sqrt(self.kx ** 2 + self.ky ** 2)
+            # id_print(jnp.min(self.k_mags))
+            # id_print(jnp.max(self.k_mags))
             self.delta_k = self.kx[1] - self.kx[0]
             self.xdim = self.ydim = self.cube_len
 
@@ -82,43 +91,53 @@ class Dens2bBatt:
         self.rs_top_hat_3d_exp = lambda k: 1 - k ** 2 / 10
         self.rs_top_hat_1d = lambda arg: jnp.sinc(arg / jnp.pi)  # engineer's sinc so divide argument by pi
         if self.two_d:
-            self.rs_top_hat_2d_norm = lambda k: 2 * j_bessel(1, k) / k
-            self.rs_top_hat_2d_exp = lambda k: 2 * k / 2 - ((k / 2) ** 3) / 2
+            self.rs_top_hat_2d_norm = lambda k: jax.scipy.special.i1(k)# jax modified bessel function of the first kind, TODO this is modified
+            # self.rs_top_hat_2d_norm = lambda k: 2 * (jnp.sqrt(jnp.pi/(2*k)) * jax.scipy.special.i1(k)) / k # jax modified bessel function of the first kind, TODO this is modified
+            # self.rs_top_hat_2d_exp = lambda k: 2 * k / 2 - ((k / 2) ** 3) / 2
             # self.bias = jnp.where(self.k_mags * self.delta_pos > 1e-6, self.rs_top_hat_2d_norm(self.k_mags),
             #                       self.rs_top_hat_2d_exp(
             #                           self.k_mags))  # issue with NonConcreteBooleans in JAX, need this syntax
+            # key = jax.random.PRNGKey(0)
+            # mean = (0, 0)
+            # self.rs_top_hat_2d_2d_gauss = jax.random.multivariate_normal(key, mean, cov)
+            self.bias = self.rs_top_hat_2d_norm(self.k_mags)
         elif self.one_d:
+            self.constant = 1
+            print("Unsure what this constant should be in 1D?")
             self.rs_top_hat_1d = lambda arg: self.constant * jnp.sinc(
                 arg / jnp.pi)  # engineer's sinc so divide argument by pi
             self.tophatted_ks = self.rs_top_hat_1d(self.k_mags)
 
         # static
         self.avg_z = 7
+        self.b_0 = 0.593
+        self.alpha = 0.564
+        self.k_0 = 0.185
         self.b_mz = lambda k: self.b_0 / (1 + k / self.k_0) ** self.alpha # bias factor (8) in paper
         if flow:
             self.flow()
 
 
     def apply_filter(self):
+        w_z = 1 # debug
         w_z = self.b_mz(self.k_mags * self.delta_pos)
-        # w_z = self.b_mz(self.k_mags * self.delta_pos) * self.bias
 
         self.density_k *= w_z
         if self.one_d:
             self.density_k *= self.delta_k
         elif self.two_d:
-            self.density_k *= self.delta_k**2
+            self.density_k *= self.delta_k**2 # pixels^2 * kmodes/num_pixels --> 1/Mpc^2???
         elif self.three_d:
             self.density_k *= self.delta_k**3 # scaling amplitude in fourier space for 3D
 
         self.delta_z = jnp.fft.ifftn(self.density_k)
 
-        if self.one_d:
-            self.delta_z *= self.cube_len / (2*jnp.pi)
-        elif self.two_d:
-            self.delta_z *= (self.cube_len**2) / (2*jnp.pi)**2
-        elif self.three_d:
-            self.delta_z *= (self.cube_len**3)/(2*jnp.pi)**3 # weird FFT scaling for 3D, getting rid of 1/n^3
+        # if self.one_d:
+        #     self.delta_z *= self.cube_len / (2*jnp.pi)
+        # elif self.two_d:
+        #     self.delta_z *= (self.cube_len**2) / (2*jnp.pi)**2
+        # elif self.three_d:
+        #     self.delta_z *= (self.cube_len**3)/(2*jnp.pi)**3 # weird FFT scaling for 3D, getting rid of 1/n^3
 
         if self.debug and self.two_d:
             plt.close()
@@ -164,3 +183,52 @@ class Dens2bBatt:
         self.get_z_re()
         self.get_x_hi()
         self.get_temp_brightness()
+
+
+
+if __name__ == "__main__":
+    import jax_main
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    rho = jnp.asarray([1.92688, -0.41562])
+    z = 15
+    dens2Tb = Dens2bBatt(rho, 1, z)
+    Tb = dens2Tb.temp_brightness
+    print(Tb)
+
+    for z in [7]:
+
+        # dir = "/Users/sabrinaberger/Library/Mobile Documents/com~apple~CloudDocs/CosmicDawn/building/21cmFASTBoxes_{}/PerturbedField_*".format(z)
+        # hf = h5py.File(glob.glob(dir)[0], 'r')
+        # data = hf["PerturbedField/density"]
+        seed = 1010
+        minimizer_functions = jax_main.SwitchMinimizer(seed=seed, z=14, num_bins=128, create_instance=True)
+        density = minimizer_functions.create_better_normal_field(seed=seed).delta_x()
+        print(jnp.shape(density))
+        #### TO RUN A DENSITY FIELD TO TEMPERATURE BRIGHTNESS CONVERSION
+        dens2Tb = Dens2bBatt(density, 1, z, debug=True)
+        Tb = dens2Tb.temp_brightness
+        z_re = dens2Tb.z_re
+        ####
+        # slice_rho = density2D[:, :, 0]
+        # slice_delta_z = dens2Tb.delta_z[:, :, 0]
+        # slice_Tb = Tb[:, :, 0]
+
+        plt.close()
+        fig, (ax1, ax2) = plt.subplots(ncols=2)
+        im1 = ax1.imshow(density)
+        divider = make_axes_locatable(ax1)
+        cax1 = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im1, cax=cax1)
+        ax1.set_title(r"$\delta_{\rho}$" + ", z = {}".format(z))
+
+        im2 = ax2.imshow(Tb)
+        divider = make_axes_locatable(ax2)
+        cax2 = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im2, cax=cax2)
+        ax2.set_title(r"$\delta T_b$" + ", z = {}".format(z))
+        plt.tight_layout(h_pad=1)
+        fig.savefig("uni_rho_T_b_{}.png".format(z))
+        plt.show()
+        plt.close()
+
+        print(jnp.min(Tb))

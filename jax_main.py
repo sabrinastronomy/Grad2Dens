@@ -8,12 +8,9 @@ independent_only_jax function written by Adrian Liu and Adélie Gorce
 
 # import jax related packages
 import jax
-import os
-import scipy.interpolate as interpolate
-import skimage
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 from jax.config import config
-from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are preself.compiledd
+from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
 from jax.scipy.optimize import \
     minimize as minimize_jax  # this is the bread and butter algorithm of this work, minimization using Jax optimized gradients
 # from jax.example_libraries import optimizers as jaxopt
@@ -46,9 +43,11 @@ matplotlib.rcParams.update({'font.size': 12})
 # print(grad_tanh(110.))
 
 class SwitchMinimizer:
-    def __init__(self, seed, z, num_bins, likelihood_off=False, prior_off=False, data=None, truth_field=None, s_field=None, fixed_field=None,
+    def __init__(self, seed, z, num_bins, likelihood_off=False, prior_off=False, data=None, truth_field=None,
+                 s_field=None, fixed_field=None,
                  noise_off=True, side_length=256, dimensions=2, debug=False, physical_side_length=256,
-                 verbose=False, plot_direc="2D_plots", mask_ionized=False, weighted_prior=False, new_prior=False, old_prior=False, use_truth_mm=False,
+                 verbose=False, plot_direc="2D_plots", mask_ionized=False, weighted_prior=False, new_prior=False,
+                 old_prior=False, use_truth_mm=False,
                  create_instance=False):
         """
         TODO update
@@ -99,14 +98,15 @@ class SwitchMinimizer:
         self.original_prior = old_prior
         self.use_truth_mm = use_truth_mm
         self.create_instance = create_instance
-
+        assert (self.new_prior or self.original_prior)
         ## new stuff
-        self.resolution = self.side_length / self.physical_side_length # number of pixels / physical side length
-
-        self.area = self.side_length**2
+        self.resolution = self.side_length / self.physical_side_length  # number of pixels / physical side length
+        print("resolution ", self.resolution)
+        self.area = self.side_length ** 2
         # kmax = 2 * jnp.pi / self.physical_side_length * (self.side_length / 2)
         kmax = 50
-        self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.physical_side_length, self.z, self.dim)
+        if self.use_truth_mm:
+            self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.physical_side_length, self.z, self.dim)
         ### get a tuple with the dimensions of the field
         self.size = []
         for i in range(self.dim):
@@ -132,59 +132,58 @@ class SwitchMinimizer:
         ### get *latent space* (z or unbiased field) and *data* only if self.data = np.array([None]) ##############################
         if self.data.any() == None and self.truth_field.any() == None:
             ### 1) create latent space (density field)
-            pb_data_unbiased_field = self.create_better_normal_field(seed=self.seed)
+            pb_data_unbiased_field = self.create_better_normal_field(seed=self.seed).delta_x()
             # truth field is just unbiased version made with pbox
-            self.truth_field = pb_data_unbiased_field.delta_x()
-            if self.original_prior: #old version
+            self.truth_field = jnp.asarray(pb_data_unbiased_field)
+            # self.truth_field = pb_data_unbiased_field
+            # if self.original_prior: #old version
+            # calculating both regardless of prior
+            if self.use_truth_mm:  # use theory matter power spectrum in prior
+                if self.original_prior:
+                    self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true,
+                                                                                               self.side_length, self.z)
+                    self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
+                        self.pspec_2d_true + 1j * self.pspec_2d_true)
+            else:  # use individual realization of a field's power spectrum in prior
                 self.fft_truth = self.fft_jax(self.truth_field)
-                self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true, self.side_length, self.z)
-                # counts, pspec, kvals = self.p_spec_normal(self.pspec_2d_true, self.num_bins)
-                # mask_kvals = kvals < 1.2
-                # counts_func = interpolate.interp1d(kvals, counts, fill_value="extrapolate", bounds_error=False)
-                # ensuring there are no 0s in the weights
-                # mask_0 = self.kvals_truth == 0
-                # self.kvals_truth[mask_0] = 0.01
-                # self.weights = jnp.sqrt(counts_func(self.kvals_truth))
-                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_2d_true + 1j * self.pspec_2d_true)
-                # self.weights_re, self.weights_im = self.INDICES_independent_only_jax(self.weights) # get im, re of weights
-                # self.pspec_indep_nums_re *= self.weights_re
-                # self.pspec_indep_nums_im *= self.weights_im
+                self.pspec_box = jnp.abs(self.fft_truth) ** 2
+                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
+                    self.pspec_box + 1j * self.pspec_box)
 
-            elif self.new_prior:
-                if self.dim == 2:
-                    counts, self.pspec_box, k_vals_all = circular_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
-                if self.dim == 3:
-                    counts, self.pspec_box, k_vals_all = spherical_p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.area)
-
-                plt.close()
-                plt.scatter(k_vals_all, counts)
-                plt.xlabel("k vals")
-                plt.ylabel("counts")
-                plt.xscale("log")
-                plt.show()
-                plt.close()
-                self.weights = np.full_like(counts, 0.2)
-                self.weights[k_vals_all > 12] = 1
+            # elif self.new_prior:
+            if self.dim == 2:
+                counts, self.p_spec_truth_realization, k_vals_all = circular_spec_normal(self.truth_field,
+                                                                                         self.num_bins, self.resolution,
+                                                                                         self.area)
+            if self.dim == 3:
+                counts, self.p_spec_truth_realization, k_vals_all = spherical_p_spec_normal(self.truth_field,
+                                                                                            self.num_bins,
+                                                                                            self.resolution, self.area)
+            if self.use_truth_mm:
                 self.truth_final_pspec = self.pspec_true(k_vals_all)
-                plt.close()
-                plt.loglog(k_vals_all, self.truth_final_pspec, label="cmb generated")
-                plt.loglog(k_vals_all, self.pspec_box, label="pspec of truth")
-                plt.legend()
-                plt.show()
-                plt.close()
 
+            plt.close()
+            plt.loglog(k_vals_all, self.p_spec_truth_realization, label="everything")
+            mask_high_only = k_vals_all > 2
+            plt.loglog(k_vals_all[mask_high_only], self.p_spec_truth_realization[mask_high_only], label="upper ks only")
+            plt.legend()
+            plt.show()
+            plt.close()
 
-            else:
-                print("ERROR")
-                exit()
+            plt.close()
+            plt.loglog(k_vals_all, counts)
+            plt.xlabel("k vals")
+            plt.ylabel("counts")
+            plt.show()
+            plt.close()
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
             print("self.data")
             print(np.max(self.data))
-        else: # data included in initialization of class
+        else:  # data included in initialization of class
             # print("Using previously generated data and truth field.")
-            assert(jnp.shape(self.truth_field)[0] != 0)
-            assert(jnp.shape(self.data)[0] != 0)
+            assert (jnp.shape(self.truth_field)[0] != 0)
+            assert (jnp.shape(self.data)[0] != 0)
             print("Not yet implemented")
             exit()
         ###############################################################################################################
@@ -196,9 +195,12 @@ class SwitchMinimizer:
         if not self.noise_off:
             print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
-            self.data = self.data + self.create_jax_normal_field(100) # 100 is the seed of the noise (same each time)
+            self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
         # self.rms_Tb = jnp.std(self.data)
         self.N_diag = self.rms ** 2 * jnp.ones((self.side_length ** self.dim))
+        self.likelihood_all = jnp.empty(int(1e5))
+        self.prior_all = jnp.empty(int(1e5))
+
         # print("N_diagonal")
         # id_print(self.N_diag)
         ###############################################################################################################
@@ -254,10 +256,14 @@ class SwitchMinimizer:
         # Start gradient descent ######################################################################################
         self.opt_result = self.differentiate_2D_func()
         self.best_field = self.opt_result.flatten()
+        # self.best_param = self.opt_result.flatten()[-1]
+        # print("BEST PARAM")
+        # print(self.best_param)
         if self.mask_ionized:
             # put back the ionized regions which are the only things allowed to change
-            assert jnp.shape(self.best_field) == (self.side_length**2,)
-            self.preserve_original = self.preserve_original.at[self.ionized_indices].set(self.best_field[self.ionized_indices])
+            assert jnp.shape(self.best_field) == (self.side_length ** 2,)
+            self.preserve_original = self.preserve_original.at[self.ionized_indices].set(
+                self.best_field[self.ionized_indices])
             self.best_field_reshaped = jnp.array(jnp.reshape(self.preserve_original, self.size))
         else:
             self.best_field_reshaped = jnp.array(jnp.reshape(self.best_field, self.size))
@@ -268,9 +274,10 @@ class SwitchMinimizer:
     def differentiate_2D_func(self):
         ## field should already be flattened here
         func = self.chi_sq_jax
-        if self.prior_off:
-            self.likelihood_cand_fields = jnp.zeros((1000, self.side_length ** 2))
-            self.iter_num_internal = 0
+
+        fig, self.inter_ax = plt.subplots()
+        # if self.prior_off:
+        #     self.likelihood_cand_fields = jnp.zeros((1000, self.side_length ** 2))
         ## ORIGINAL HERE
         # opt_result = minimize_jax(func, self.s_field, method='l-bfgs-experimental-do-not-rely-on-this', options={"maxiter": 1e100, "maxls": 1e100})
         # print("status number of run")
@@ -304,16 +311,20 @@ class SwitchMinimizer:
         ######## running jaxopt version
         # jaxopt.LBFGS.stop_if_linesearch_fails = True
         # , options = {"maxiter": 1e100, "maxls": 1e100})
-        opt_result = jaxopt.LBFGS(fun=self.chi_sq_jax, tol=1e-12, maxiter=1000, maxls=1000, stop_if_linesearch_fails=True)
+        opt_result = jaxopt.LBFGS(fun=self.chi_sq_jax, tol=1e-12, maxiter=1000, maxls=1000,
+                                  stop_if_linesearch_fails=True)
+        # self.param_guess = 0.583
+        # self.s_field = jnp.append(self.s_field, self.param_guess)
         params, state = opt_result.run(self.s_field)
         self.final_func_val = state.value
 
         if self.verbose:
-            print("Was it successful?")
-            print(opt_result.success)
+            # print("Was it successful?")
+            # print(opt_result.success)
             print("How many iterations did it take?")
             print(self.iter_num)
-
+        # print(np.shape(params))
+        print(params[-1])
         return params
 
     def chi_sq_jax(self, guess):
@@ -325,13 +336,14 @@ class SwitchMinimizer:
 
         :param guess - Array of real numbers for s (the candidate field) and/or the parameter(s)
         """
-
+        # param_guess = guess[-1]
+        # guess = guess[:-1]
         if self.mask_ionized:
             copy_guess = jnp.copy(guess.flatten())
             full_guess = jnp.copy(self.preserve_original.flatten())
 
-            assert jnp.shape(copy_guess) == (self.side_length**2,)
-            assert jnp.shape(full_guess) == (self.side_length**2,)
+            assert jnp.shape(copy_guess) == (self.side_length ** 2,)
+            assert jnp.shape(full_guess) == (self.side_length ** 2,)
 
             full_guess = full_guess.at[self.ionized_indices].set(copy_guess[self.ionized_indices])
             candidate_field = jnp.reshape(full_guess, self.size)
@@ -357,29 +369,38 @@ class SwitchMinimizer:
         #### get likelihood for all cases #############################################################################
         likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
         ###############################################################################################################
+        # want circular/spherical pspec regardless of which prior we use
+        if self.dim == 2:
+            counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution,
+                                                                self.area)
+        elif self.dim == 3:
+            counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution,
+                                                                   self.area)
+        # also want difference between the candidate and truth field
+        if self.use_truth_mm:
+            x = (self.truth_final_pspec - power_curr).flatten()
+        else:
+            x = (self.p_spec_truth_realization - power_curr).flatten()
 
-        if self.original_prior: # old version
+        if self.original_prior:  # old version
             # FT and get only the independent modes
-            self.fourier_box = self.fft_jax(candidate_field) * (1/self.weights**2)
+            self.fourier_box = self.fft_jax(candidate_field)
             fourier_nums_real, fourier_nums_imag = self.independent_only_jax(self.fourier_box)
 
-            real_prior = jnp.dot(fourier_nums_real**2,
-                        2 / self.pspec_indep_nums_re)  # Half variance for real
-            imag_prior = jnp.dot(fourier_nums_imag**2,
-                        2 / self.pspec_indep_nums_im)  # Half variance for imag
+            real_prior = jnp.dot(fourier_nums_real ** 2,
+                                 2 / self.pspec_indep_nums_re)  # Half variance for real
+            imag_prior = jnp.dot(fourier_nums_imag ** 2,
+                                 2 / self.pspec_indep_nums_im)  # Half variance for imag
 
             prior = real_prior + imag_prior
 
         elif self.new_prior:
-            if self.dim == 2:
-                counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
-            elif self.dim == 3:
-                counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
 
-            # sigma = counts**2
-            x = (self.truth_final_pspec - power_curr).flatten()
-            # prior = jnp.dot(x**2, 1/sigma)
-            prior = np.sum(x**2)
+            sigma = counts ** 2
+            # prior_gauss = 0.5 - param_guess
+            prior = jnp.dot(x**2, 1/sigma)
+            # prior = np.sum(x**2)
+            # prior = prior_gauss**2
             # sig = jnp.full_like(candidate_field, 0.1)
             # prior_gauss = jnp.sum(jnp.dot(candidate_field**2, 1/sig))
             # prior += prior_gauss
@@ -389,12 +410,37 @@ class SwitchMinimizer:
             # plt.show()
             # plt.close()
 
-
+        # self.likelihood_all = self.likelihood_all.at[self.iter_num].set(likelihood)
+        # self.prior_all = self.prior_all.at[self.iter_num].set(prior)
+        # id_print(likelihood)
         if self.likelihood_off:
-            # likelihood = 10**-2 *  likelihood
             likelihood = 0
+            # likelihood = jax.lax.cond(jnp.log10(likelihood) < 7.5, lambda x: likelihood, lambda x: 0., 1)
+                # print("likelihood turned on")
         elif self.prior_off:
             prior = 0
+        # else:
+            # # what if we just focus on high k modes for a sec
+            # k_val_mask = jnp.where(k_values > 2., 1, 0)
+            # # prior = np.sum(x[k_val_mask]**2)
+            # print("prior")
+            # id_print(prior)
+            # prior = 0
+            # if self.iter_num % 2 == 0:
+            #     print("prior entered")
+            #     id_print(likelihood)
+            #     prior = 0
+            # else:
+            #     print("likelihood entered")
+            #     id_print(prior)
+            #     likelihood = 0
+
+            # mag_likelihood = jnp.log10(likelihood)
+            # mag_prior = jnp.log10(prior)
+            # likelihood /= 10**mag_likelihood
+            # prior /= 10**mag_prior
+            # id_print(likelihood)
+            # id_print(prior)
 
         # if self.weighted_prior:
         #     self.likelihood = likelihood
@@ -404,19 +450,18 @@ class SwitchMinimizer:
         #     self.final_likelihood_prior = likelihood + prior
         # else:
         #     mean_curr = jnp.abs(jnp.mean(candidate_field))
-            # print("mean_curr")
-            # id_print(mean_curr)
+        # print("mean_curr")
+        # id_print(mean_curr)
 
+        # prior_extra = jnp.where(mean_curr < 1., 0, 1e5)
 
-            # prior_extra = jnp.where(mean_curr < 1., 0, 1e5)
-
-            # if mean_prior < 1.:
-            #     prior_extra = 0
-            # else:
-            #     prior_extra = 1e5
-            # self.likelihood = likelihood
-            # self.prior = prior
-        self.final_likelihood_prior = likelihood + prior
+        # if mean_prior < 1.:
+        #     prior_extra = 0
+        # else:
+        #     prior_extra = 1e5
+        # self.likelihood = likelihood
+        # self.prior = prior
+        self.final_likelihood_prior = prior + likelihood
 
         if self.verbose:
             print("self.likelihood_off", self.likelihood_off)
@@ -451,30 +496,46 @@ class SwitchMinimizer:
                 pk=self.pspec_true,  # The power-spectrum
                 boxlength=self.physical_side_length,  # Size of the box (sets the units of k in pk)
                 seed=seed  # Use the same seed as our powerbox
-                #ensure_physical=True
+                # ensure_physical=True
             )
         else:
             ## should only be used for setting an initial test field
-            self.pb = pbox.LogNormalPowerBox(
+            self.pb = pbox.PowerBox(
                 N=self.side_length,  # number of wavenumbers
                 dim=self.dim,  # dimension of box
-                pk=lambda k: 0.1 * k**-2,  # The power-spectrum
+                pk=lambda k: 0.1 * k ** -2,  # The power-spectrum
                 boxlength=self.physical_side_length,  # Size of the box (sets the units of k in pk)
                 seed=seed,  # Use the same seed as our powerbox
                 # ensure_physical=True
             )
+
+            # field_ffted = jnp.fft.fftn(self.pb.delta_x())
+            # k_arr = np.fft.fftshift(np.fft.fftfreq(self.side_length)) * 2 * np.pi
+            # k_arr *= self.resolution  # pixels/side length, changing to Mpc^-1
+            # k1, k2 = np.meshgrid(k_arr, k_arr)
+            # k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
+            # field_ffted = jnp.where(k_mag_full < 1, field_ffted, 0)
+            # final_field = jnp.real(jnp.fft.ifft(field_ffted))
+            # import jax.scipy as jsp
+            # x = jnp.linspace(-3, 3, 7)
+            # window = jsp.stats.norm.pdf(x) * jsp.stats.norm.pdf(x[:, None])
+            # final_field_smoothed = jsp.signal.convolve(self.pb.delta_x(), window, mode='same')
+            # plt.imshow(self.pb.delta_x() - final_field_smoothed)
+            # plt.show()
+            # plt.close()
+        # return final_field_smoothed
         return self.pb
 
     def ft_jax(self, x):
         return jnp.sum(jnp.abs(jnp.fft.fft(x)) ** 2)
 
-    def bias_field(self, field):
+    def bias_field(self, field, b_0=0.593):
         """
         Used to bias field or convert to temperature brightness.
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
-        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.z, flow=True, resolution=self.resolution)
+        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.z, flow=True, b_0=b_0)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
 
@@ -485,7 +546,7 @@ class SwitchMinimizer:
             plt.colorbar()
             plt.savefig(f"{self.plot_direc}/plots/{self.iter_num}_X_HI.png")
         if self.verbose:
-            print("The number of neutral pixels is: " )
+            print("The number of neutral pixels is: ")
             id_print(self.neutral_count)
 
         ###############################################################################################################
@@ -506,7 +567,7 @@ class SwitchMinimizer:
 
         THIS ONLY WORKS IN 2D RIGHT NOW
         """
-        assert(len(jnp.shape(box)) > 1)
+        assert (len(jnp.shape(box)) > 1)
         N = box.shape[0]
         # First get the upper half plane minus the bits that aren't independent
         first_row = box[0, :-(N // 2 - 1)]
@@ -514,12 +575,12 @@ class SwitchMinimizer:
         origin_row = box[N // 2, :-(N // 2 - 1)]
 
         real_part = jnp.concatenate((jnp.real(first_row),
-                                    jnp.real(sandwiched_rows),
-                                    jnp.real(origin_row)))
+                                     jnp.real(sandwiched_rows),
+                                     jnp.real(origin_row)))
 
         imag_part = jnp.concatenate((jnp.imag(first_row[1:-1]),
-                                    jnp.imag(sandwiched_rows),
-                                    jnp.imag(origin_row[1:-1])))
+                                     jnp.imag(sandwiched_rows),
+                                     jnp.imag(origin_row[1:-1])))
 
         return real_part, imag_part
 
@@ -527,7 +588,7 @@ class SwitchMinimizer:
         """
         This takes an array and gets the independent parts by index without taking the real or imaginary parts of them
         """
-        assert(len(jnp.shape(box)) > 1)
+        assert (len(jnp.shape(box)) > 1)
         N = box.shape[0]
         # First get the upper half plane minus the bits that aren't independent
         first_row = box[0, :-(N // 2 - 1)]
@@ -535,12 +596,12 @@ class SwitchMinimizer:
         origin_row = box[N // 2, :-(N // 2 - 1)]
 
         real_part = jnp.concatenate((first_row,
-                                    sandwiched_rows,
-                                    origin_row))
+                                     sandwiched_rows,
+                                     origin_row))
 
         imag_part = jnp.concatenate((first_row[1:-1],
-                                    sandwiched_rows,
-                                    origin_row[1:-1]))
+                                     sandwiched_rows,
+                                     origin_row[1:-1]))
 
         return real_part, imag_part
 
@@ -601,4 +662,3 @@ class SwitchMinimizer:
                 fig.suptitle(f"bias = {self.actual_bias}, side length = {self.side_length}")
                 plt.savefig(f"{self.plot_direc}/plots/pixel_num_{i}_check.png")
                 plt.close()
-
