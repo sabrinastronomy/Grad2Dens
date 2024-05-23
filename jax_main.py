@@ -19,7 +19,7 @@ import theory_matter_ps
 from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
-# config.update('jax_disable_jit', True) # this turns off jit compiling which is helpful for debugging
+config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
 
 import matplotlib.pyplot as plt
 import powerbox as pbox
@@ -43,107 +43,63 @@ matplotlib.rcParams.update({'font.size': 12})
 # print(grad_tanh(110.))
 
 class SwitchMinimizer:
-    def __init__(self, seed, z, num_bins, likelihood_off=False, prior_off=False, data=None, truth_field=None,
-                 s_field=None, fixed_field=None,
-                 noise_off=True, side_length=256, dimensions=2, debug=False, physical_side_length=256,
-                 verbose=False, plot_direc="2D_plots", mask_ionized=False, weighted_prior=False, new_prior=False,
-                 old_prior=False, use_truth_mm=False,
-                 create_instance=False):
-        """
-        TODO update
-        :param z - the redshift you would like to create your density field at
-        :param data (Default: None) - data that you're fitting your field to and will be used in your chi-squared.
-                                If None, the data will be generated from the field meaning you know your truth field
-                                beforehand.
-        :param s_field (Default: None) - initial field to start density field optimization at.
-                                If None, a Gaussian normal field will be used with sigma = 0.2 *
-                                the standard deviation of the data.
-        :param fixed_field (Default: None) - only used if include_param = True to keep the field constant while chi squared is
-        :param fixed_field (Default: None) - only used if include_param = True to keep the field constant while chi squared is
-                                minimized and the bias is found. If None, this is not used.
-        :param noise_off (Default: True) - adds noise to the data if False
-        :param side_length (Default: 256) - sets the side length of the field
-        :param dim (Default: 2) - sets dimensions of the field
-        :param indep_prior (Default: False) - use Adrian's prior that only grabs the independent parts of the fourier transform and power spectrum to generate a prior
-        :param debug (Default: False) - turns off Jit, saves all intermediate likelihood and prior values
-        :param verbose (Default: False) - whether or not to print a bunch of stuff
-        :param plot_direc (Default: 2D_plots) - where to save plots
-        :param autorun (Default: True) - run an immediate gradient descent
-        """
+    def __init__(self, config_params, s_field):
+
         # checking to make sure one of these three is true
         # assert np.count_nonzero(check_setup_bool_arr) == 1
 
-        self.seed = seed
-        self.z = z
-        self.likelihood_off = likelihood_off
-        self.prior_off = prior_off
-        self.data = data
-        self.truth_field = truth_field
+        self.config_params = config_params
         self.s_field = s_field
-        self.fixed_field = fixed_field
-        self.noise_off = noise_off
-        self.side_length = side_length
-        self.physical_side_length = physical_side_length
-        self.dim = dimensions
-        self.debug = debug
-        self.verbose = verbose
-        self.plot_direc = plot_direc
-        self.iter_num = 0
-        self.prior_count = 0
-        self.likelihood_count = 0
-        self.mask_ionized = mask_ionized
-        self.num_bins = num_bins
-        self.weighted_prior = weighted_prior
-        self.new_prior = new_prior
-        self.original_prior = old_prior
-        self.use_truth_mm = use_truth_mm
-        self.create_instance = create_instance
-        assert (self.new_prior or self.original_prior)
+
         ## new stuff
-        self.resolution = self.side_length / self.physical_side_length  # number of pixels / physical side length
+        self.resolution = self.config_params.side_length / self.config_params.physical_side_length  # number of pixels / physical side length
         print("resolution ", self.resolution)
-        self.area = self.side_length ** 2
+        self.area = self.config_params.side_length ** 2
         # kmax = 2 * jnp.pi / self.physical_side_length * (self.side_length / 2)
         kmax = 50
-        if self.use_truth_mm:
-            self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.physical_side_length, self.z, self.dim)
+        if self.config_params.use_truth_mm:
+            self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.config_params.physical_side_length, self.config_params.z, self.config_params.dim)
         ### get a tuple with the dimensions of the field
         self.size = []
-        for i in range(self.dim):
-            self.size.append(self.side_length)
+        for i in range(self.config_params.dim):
+            self.size.append(self.config_params.side_length)
         self.size = tuple(self.size)
-        self.total_pixels = self.side_length ** self.dim  # total number of pixels
+        self.total_pixels = self.config_params.side_length ** self.config_params.dim  # total number of pixels
         ###############################################################################################################
-        if self.seed == None:
+        if self.config_params.seed == None:
             print("Seed is none.")
             return
         ### Debugging setup ###########################################################################################
-        if self.debug:
+        if self.config_params.debug:
             ### debugging arrays and saving iteration number
             self.likelihood_all = np.zeros((1000))
-            self.value_all = np.zeros((self.side_length ** self.dim, 1000))
+            self.value_all = np.zeros((self.config_params.side_length ** self.config_params.dim, 1000))
             self.prior_param_all = np.zeros((1000))
-            self.likelihood_indiv_all = np.zeros((self.side_length ** self.dim, 1000))
+            self.likelihood_indiv_all = np.zeros((self.config_params.side_length ** self.config_params.dim, 1000))
             self.param_value_all = np.zeros((1000))
         ###############################################################################################################
-        if self.create_instance:
+        if self.config_params.create_instance:
             # just getting methods and instance
             return
         ### get *latent space* (z or unbiased field) and *data* only if self.data = np.array([None]) ##############################
-        if self.data.any() == None and self.truth_field.any() == None:
+        if self.config_params.data == None and self.config_params.truth_field == None:
             ### 1) create latent space (density field)
-            pb_data_unbiased_field = self.create_better_normal_field(seed=self.seed).delta_x()
+            pb_data_unbiased_field = self.create_better_normal_field(seed=self.config_params.seed).delta_x()
             # truth field is just unbiased version made with pbox
             self.truth_field = jnp.asarray(pb_data_unbiased_field)
             # self.truth_field = pb_data_unbiased_field
-            # if self.original_prior: #old version
+            # if self.old_prior: #old version
             # calculating both regardless of prior
-            if self.use_truth_mm:  # use theory matter power spectrum in prior
-                if self.original_prior:
+            if self.config_params.use_truth_mm:  # use theory matter power spectrum in prior
+                if self.config_params.old_prior:
                     self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true,
-                                                                                               self.side_length, self.z)
+                                                                                               self.config_params.side_length,
+                                                                                               self.config_params.z)
                     self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
                         self.pspec_2d_true + 1j * self.pspec_2d_true)
+
+
+
             else:  # use individual realization of a field's power spectrum in prior
                 self.fft_truth = self.fft_jax(self.truth_field)
                 self.pspec_box = jnp.abs(self.fft_truth) ** 2
@@ -151,16 +107,14 @@ class SwitchMinimizer:
                     self.pspec_box + 1j * self.pspec_box)
 
             # elif self.new_prior:
-            if self.dim == 2:
+            if self.config_params.dim == 2:
                 counts, self.p_spec_truth_realization, k_vals_all = circular_spec_normal(self.truth_field,
-                                                                                         self.num_bins, self.resolution,
+                                                                                         self.config_params.num_bins,
+                                                                                         self.resolution,
                                                                                          self.area)
-            if self.dim == 3:
-                counts, self.p_spec_truth_realization, k_vals_all = spherical_p_spec_normal(self.truth_field,
-                                                                                            self.num_bins,
-                                                                                            self.resolution, self.area)
-            if self.use_truth_mm:
+            if self.config_params.use_truth_mm:
                 self.truth_final_pspec = self.pspec_true(k_vals_all)
+
 
             plt.close()
             plt.loglog(k_vals_all, self.p_spec_truth_realization, label="everything")
@@ -178,31 +132,32 @@ class SwitchMinimizer:
             plt.close()
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
-            print("self.data")
-            print(np.max(self.data))
         else:  # data included in initialization of class
             # print("Using previously generated data and truth field.")
-            assert (jnp.shape(self.truth_field)[0] != 0)
-            assert (jnp.shape(self.data)[0] != 0)
+            assert (jnp.shape(self.config_params.truth_field)[0] != 0)
+            assert (jnp.shape(self.config_params.data)[0] != 0)
+            self.data = self.config_params.data
+            self.truth_field = self.config_params.truth_field
             print("Not yet implemented")
             exit()
         ###############################################################################################################
         self.ionized_indices = jnp.argwhere(self.data.flatten() == 0).flatten()
         self.neutral_indices = jnp.argwhere(self.data.flatten() != 0).flatten()
 
+        self.ionized_indices_mask = (self.data == 0).flatten()
+        self.neutral_indices_mask = (self.data != 0).flatten()
+
         # generate diagonal matrices for chi-squared and adding noise if selected #####################################
         self.rms = 0.1
-        if not self.noise_off:
+        if not self.config_params.noise_off:
             print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
             self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
         # self.rms_Tb = jnp.std(self.data)
-        self.N_diag = self.rms ** 2 * jnp.ones((self.side_length ** self.dim))
-        self.likelihood_all = jnp.empty(int(1e5))
-        self.prior_all = jnp.empty(int(1e5))
+        self.N_diag = self.rms ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim))
 
-        # print("N_diagonal")
-        # id_print(self.N_diag)
+        print("N_diagonal")
+        id_print(self.N_diag)
         ###############################################################################################################
 
         # Generate a starting point field that is just 0.2 * rms of the data if it's not already specified
@@ -240,14 +195,24 @@ class SwitchMinimizer:
         seed = jax.random.PRNGKey(seed)
         return jax.random.normal(seed, shape=self.size)
 
-    def rerun(self, likelihood_off, prior_off, mask_ionized):
+    def run(self, likelihood_off, prior_off, mask_ionized, use_old_field, iter_num_big):
+
         self.mask_ionized = mask_ionized
         self.likelihood_off = likelihood_off
         self.prior_off = prior_off
+        self.iter_num_big = iter_num_big
+
+        print("iter num")
+        print(self.iter_num_big)
         # sets starting field as best old field
-        if self.verbose:
+        if self.config_params.verbose:
             print("USING OLD STARTING FIELD.")
-        self.s_field = jnp.copy(self.best_field_reshaped).flatten()
+        if use_old_field:
+            self.s_field = jnp.copy(self.best_field_reshaped).flatten()
+            gaussian_noise = np.random.normal(size=(self.config_params.side_length, self.config_params.side_length)).flatten()
+
+            # if self.iter_num_big == 1:
+            #     self.s_field = self.s_field.at[self.ionized_indices_mask].set(gaussian_noise[self.ionized_indices_mask])
         if self.mask_ionized:
             self.preserve_original = jnp.copy(self.s_field)
         self.run_grad_descent()
@@ -256,75 +221,46 @@ class SwitchMinimizer:
         # Start gradient descent ######################################################################################
         self.opt_result = self.differentiate_2D_func()
         self.best_field = self.opt_result.flatten()
-        # self.best_param = self.opt_result.flatten()[-1]
-        # print("BEST PARAM")
-        # print(self.best_param)
+
         if self.mask_ionized:
             # put back the ionized regions which are the only things allowed to change
-            assert jnp.shape(self.best_field) == (self.side_length ** 2,)
+            assert jnp.shape(self.best_field) == (self.config_params.side_length ** self.config_params.dim,)
             self.preserve_original = self.preserve_original.at[self.ionized_indices].set(
                 self.best_field[self.ionized_indices])
             self.best_field_reshaped = jnp.array(jnp.reshape(self.preserve_original, self.size))
         else:
             self.best_field_reshaped = jnp.array(jnp.reshape(self.best_field, self.size))
         ###############################################################################################################
-        if self.debug:
+        if self.config_params.debug:
             self.debug_likelihood()
 
     def differentiate_2D_func(self):
         ## field should already be flattened here
-        func = self.chi_sq_jax
-
-        fig, self.inter_ax = plt.subplots()
-        # if self.prior_off:
-        #     self.likelihood_cand_fields = jnp.zeros((1000, self.side_length ** 2))
-        ## ORIGINAL HERE
-        # opt_result = minimize_jax(func, self.s_field, method='l-bfgs-experimental-do-not-rely-on-this', options={"maxiter": 1e100, "maxls": 1e100})
-        # print("status number of run")
-        # print(opt_result.status)
-        # self.final_func_val = opt_result.fun
-        # print("FINAL HESSIAN")
-        # self.hessian_final = opt_result.hess_inv
-        # print(opt_result.hess_inv)
-        # print("number optimization")
-        # print(opt_result.nit)
-        # print("number funct")
-        # print(opt_result.nfev)
-        # print("jacobian")
-        # print(opt_result.njev)
-        # print("Was it successful?")
-        # print(opt_result.success)
-        # return opt_result.x
-        #######
-
-        # opt_result = jaxopt.ScipyMinimize(method="l-bfgs-b", fun=func, tol=1e-12)
-        # bounds = jnp.repeat(np.asarray([-1, jnp.max(self.truth_field)]), self.side_length**2)
-        # bounds = []
-        # for i in range(self.side_length**2):
-        #     bounds.append((-1, jnp.max(self.truth_field)))
-        # self.mask_ionized = True
-        # self.prior_off = False
-        # self.likelihood_off = False
-        # self.preserve_original = self.truth_field.flatten()
-        # result = scipy.optimize.shgo(func, bounds=bounds, options={"maxfev": 10}) #, sampling_method='sobol') #minimizer_kwargs={"method": " L-BFGS-B"}
-
+        self.iter_num = 0
         ######## running jaxopt version
         # jaxopt.LBFGS.stop_if_linesearch_fails = True
         # , options = {"maxiter": 1e100, "maxls": 1e100})
+        self.likelihoods = jnp.empty(1000)
+        self.priors = jnp.empty(1000)
         opt_result = jaxopt.LBFGS(fun=self.chi_sq_jax, tol=1e-12, maxiter=1000, maxls=1000,
                                   stop_if_linesearch_fails=True)
-        # self.param_guess = 0.583
-        # self.s_field = jnp.append(self.s_field, self.param_guess)
+
         params, state = opt_result.run(self.s_field)
+        print('state options')
+        print(state)
         self.final_func_val = state.value
 
-        if self.verbose:
-            # print("Was it successful?")
-            # print(opt_result.success)
-            print("How many iterations did it take?")
-            print(self.iter_num)
-        # print(np.shape(params))
-        print(params[-1])
+        print("How many iterations did it take?")
+        print(self.iter_num)
+
+        plt.close()
+        plt.plot(self.likelihoods, ls=None, label="likelihoods")
+        plt.plot(self.priors, ls=None, label="priors")
+        plt.legend()
+        plt.savefig(self.plot_direc + f"/plots/iter_num_{self.iter_num_big}.png")
+        plt.close()
+
+
         return params
 
     def chi_sq_jax(self, guess):
@@ -336,14 +272,14 @@ class SwitchMinimizer:
 
         :param guess - Array of real numbers for s (the candidate field) and/or the parameter(s)
         """
-        # param_guess = guess[-1]
-        # guess = guess[:-1]
+
         if self.mask_ionized:
+            print("Masking ionized")
             copy_guess = jnp.copy(guess.flatten())
             full_guess = jnp.copy(self.preserve_original.flatten())
 
-            assert jnp.shape(copy_guess) == (self.side_length ** 2,)
-            assert jnp.shape(full_guess) == (self.side_length ** 2,)
+            assert jnp.shape(copy_guess) == (self.config_params.side_length ** self.config_params.dim,)
+            assert jnp.shape(full_guess) == (self.config_params.side_length ** self.config_params.dim,)
 
             full_guess = full_guess.at[self.ionized_indices].set(copy_guess[self.ionized_indices])
             candidate_field = jnp.reshape(full_guess, self.size)
@@ -353,36 +289,23 @@ class SwitchMinimizer:
         # note param_init was passed in and is a constant
         discrepancy = self.data - self.bias_field(candidate_field)
 
-        ## calculating intermediate pspec
-        # fig_ps, ax_ps = plt.subplots()
-        # kvals, pspec = helper_func.p_spec_normal()(self.truth_field, 60, self.side_length)
-        # ax_ps.loglog(kvals, pspec, label="TRUTH", c="g")
-        # kvals, pspec = helper_func.p_spec_normal()(candidate_field.primal, 60, self.side_length)
-        # ax_ps.loglog(kvals, pspec, label=str(self.iter_num), c="k")
-        # ax_ps.set_title("intermediate pspec - both prior + likelihood on")
-        # ax_ps.set_ylim((1e-6, 1e2))
-        # ax_ps.legend(loc=1)
-        # fig_ps.savefig(f"png files/{self.iter_num}.png")
-        # plt.close()
-        ########
-
         #### get likelihood for all cases #############################################################################
         likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
         ###############################################################################################################
         # want circular/spherical pspec regardless of which prior we use
-        if self.dim == 2:
-            counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution,
+        if self.config_params.dim == 2:
+            counts, power_curr, k_values = circular_spec_normal(candidate_field, self.config_params.num_bins, self.resolution,
                                                                 self.area)
-        elif self.dim == 3:
-            counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution,
+        elif self.config_params.dim == 3:
+            counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.config_params.num_bins, self.resolution,
                                                                    self.area)
         # also want difference between the candidate and truth field
-        if self.use_truth_mm:
+        if self.config_params.use_truth_mm:
             x = (self.truth_final_pspec - power_curr).flatten()
         else:
             x = (self.p_spec_truth_realization - power_curr).flatten()
 
-        if self.original_prior:  # old version
+        if self.config_params.old_prior:  # old version
             # FT and get only the independent modes
             self.fourier_box = self.fft_jax(candidate_field)
             fourier_nums_real, fourier_nums_imag = self.independent_only_jax(self.fourier_box)
@@ -394,12 +317,12 @@ class SwitchMinimizer:
 
             prior = real_prior + imag_prior
 
-        elif self.new_prior:
+        elif self.config_params.new_prior:
 
             sigma = counts ** 2
             # prior_gauss = 0.5 - param_guess
-            prior = jnp.dot(x**2, 1/sigma)
-            # prior = np.sum(x**2)
+            prior = np.sum(x**2) + np.mean(x)
+            # prior = np.sum(x**2) - np.mean(x)
             # prior = prior_gauss**2
             # sig = jnp.full_like(candidate_field, 0.1)
             # prior_gauss = jnp.sum(jnp.dot(candidate_field**2, 1/sig))
@@ -415,10 +338,14 @@ class SwitchMinimizer:
         # id_print(likelihood)
         if self.likelihood_off:
             likelihood = 0
+            # likelihood = np.mean(x)
             # likelihood = jax.lax.cond(jnp.log10(likelihood) < 7.5, lambda x: likelihood, lambda x: 0., 1)
                 # print("likelihood turned on")
         elif self.prior_off:
             prior = 0
+            # print("trying mean prior")
+            # prior = np.mean(x)
+            # id_print(prior)
         # else:
             # # what if we just focus on high k modes for a sec
             # k_val_mask = jnp.where(k_values > 2., 1, 0)
@@ -462,8 +389,11 @@ class SwitchMinimizer:
         # self.likelihood = likelihood
         # self.prior = prior
         self.final_likelihood_prior = prior + likelihood
+        #
+        # self.priors = self.priors.at[self.iter_num].set(prior)
+        # self.likelihoods = self.likelihoods.at[self.iter_num].set(likelihood)
 
-        if self.verbose:
+        if self.config_params.verbose:
             print("self.likelihood_off", self.likelihood_off)
             print("self.prior_off", self.prior_off)
             print("prior: ")
@@ -473,10 +403,12 @@ class SwitchMinimizer:
             print("current final posterior")
             id_print(self.final_likelihood_prior)
         self.iter_num += 1
+        # print("current final posterior")
+        # id_print(self.final_likelihood_prior)
         return self.final_likelihood_prior
 
     def create_better_normal_field(self, seed):
-        if self.use_truth_mm:
+        if self.config_params.use_truth_mm:
             print("Using truth matter power spectrum to generate field.")
             # def pspecify(k):
             #     k_shape = jnp.shape(k)
@@ -491,39 +423,24 @@ class SwitchMinimizer:
 
             ## should only be used for setting an initial test field
             self.pb = pbox.LogNormalPowerBox(
-                N=self.side_length,  # number of wavenumbers
-                dim=self.dim,  # dimension of box
+                N=self.config_params.side_length,  # number of wavenumbers
+                dim=self.config_params.dim,  # dimension of box
                 pk=self.pspec_true,  # The power-spectrum
-                boxlength=self.physical_side_length,  # Size of the box (sets the units of k in pk)
+                boxlength=self.config_params.physical_side_length,  # Size of the box (sets the units of k in pk)
                 seed=seed  # Use the same seed as our powerbox
                 # ensure_physical=True
             )
         else:
             ## should only be used for setting an initial test field
             self.pb = pbox.PowerBox(
-                N=self.side_length,  # number of wavenumbers
-                dim=self.dim,  # dimension of box
-                pk=lambda k: 0.1 * k ** -2,  # The power-spectrum
-                boxlength=self.physical_side_length,  # Size of the box (sets the units of k in pk)
+                N=self.config_params.side_length,  # number of wavenumbers
+                dim=self.config_params.dim,  # dimension of box
+                pk=lambda k: 0.1 * k ** -3.5,  # The power-spectrum
+                boxlength=self.config_params.physical_side_length,  # Size of the box (sets the units of k in pk)
                 seed=seed,  # Use the same seed as our powerbox
                 # ensure_physical=True
             )
 
-            # field_ffted = jnp.fft.fftn(self.pb.delta_x())
-            # k_arr = np.fft.fftshift(np.fft.fftfreq(self.side_length)) * 2 * np.pi
-            # k_arr *= self.resolution  # pixels/side length, changing to Mpc^-1
-            # k1, k2 = np.meshgrid(k_arr, k_arr)
-            # k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
-            # field_ffted = jnp.where(k_mag_full < 1, field_ffted, 0)
-            # final_field = jnp.real(jnp.fft.ifft(field_ffted))
-            # import jax.scipy as jsp
-            # x = jnp.linspace(-3, 3, 7)
-            # window = jsp.stats.norm.pdf(x) * jsp.stats.norm.pdf(x[:, None])
-            # final_field_smoothed = jsp.signal.convolve(self.pb.delta_x(), window, mode='same')
-            # plt.imshow(self.pb.delta_x() - final_field_smoothed)
-            # plt.show()
-            # plt.close()
-        # return final_field_smoothed
         return self.pb
 
     def ft_jax(self, x):
@@ -535,17 +452,17 @@ class SwitchMinimizer:
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
-        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.z, flow=True, b_0=b_0)
+        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.config_params.z, flow=True, b_0=b_0)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
 
-        if self.debug:
+        if self.config_params.debug:
             plt.close()
             plt.imshow(batt_model_instance.X_HI)
             plt.title("X_HI")
             plt.colorbar()
-            plt.savefig(f"{self.plot_direc}/plots/{self.iter_num}_X_HI.png")
-        if self.verbose:
+            plt.savefig(f"{self.config_params.plot_direc}/plots/{self.config_params.iter_num}_X_HI.png")
+        if self.config_params.verbose:
             print("The number of neutral pixels is: ")
             id_print(self.neutral_count)
 

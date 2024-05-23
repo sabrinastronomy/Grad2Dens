@@ -1,6 +1,8 @@
+import jax.random
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
-from scipy.special import spherical_jn as j_bessel
+from jax.scipy.special import i1 as j_bessel
+from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
 
 # Toy Density Field
 # nx, ny = (5, 5)
@@ -56,7 +58,7 @@ class Dens2bBatt:
             self.ky = jnp.fft.fftfreq(self.density.shape[1], self.delta_pos)
             self.kx *= 2 * jnp.pi  # scaling k modes correctly
             self.ky *= 2 * jnp.pi  # scaling k modes correctly
-            self.k_mags = jnp.sqrt(self.kx ** 2 + self.ky ** 2)
+            self.k_mags = jnp.sqrt(self.kx ** 2 + self.ky[:,None] ** 2)
             self.delta_k = self.kx[1] - self.kx[0]
             self.xdim = self.ydim = self.cube_len
 
@@ -82,8 +84,11 @@ class Dens2bBatt:
         self.rs_top_hat_3d_exp = lambda k: 1 - k ** 2 / 10
         self.rs_top_hat_1d = lambda arg: jnp.sinc(arg / jnp.pi)  # engineer's sinc so divide argument by pi
         if self.two_d:
-            self.rs_top_hat_2d_norm = lambda k: 2 * j_bessel(1, k) / k
+            self.rs_top_hat_2d_norm = lambda k: 2 * j_bessel(k) / k
             self.rs_top_hat_2d_exp = lambda k: 2 * k / 2 - ((k / 2) ** 3) / 2
+            x = jnp.linspace(-3, 3, 7)
+            import jax.scipy as jsp
+
             # self.bias = jnp.where(self.k_mags * self.delta_pos > 1e-6, self.rs_top_hat_2d_norm(self.k_mags),
             #                       self.rs_top_hat_2d_exp(
             #                           self.k_mags))  # issue with NonConcreteBooleans in JAX, need this syntax
@@ -100,9 +105,15 @@ class Dens2bBatt:
 
 
     def apply_filter(self):
-        w_z = self.b_mz(self.k_mags * self.delta_pos)
-        # w_z = self.b_mz(self.k_mags * self.delta_pos) * self.bias
+        seed = 1010
+        seed = jax.random.PRNGKey(seed)
+        # jax.random.multivariate_normal(seed, 0, [[0, 0], [1, 0], [0, 1]], dtype=)
+        # self.bias = jax.random.normal(seed, jnp.shape(self.k_mags))
+        # self.bias = jnp.fft.fftn(self.bias)
+        # w_z = self.b_mz(self.k_mags * self.delta_pos)
 
+        w_z = self.b_mz(self.k_mags * self.delta_pos)
+        #
         self.density_k *= w_z
         if self.one_d:
             self.density_k *= self.delta_k
@@ -112,6 +123,14 @@ class Dens2bBatt:
             self.density_k *= self.delta_k**3 # scaling amplitude in fourier space for 3D
 
         self.delta_z = jnp.fft.ifftn(self.density_k)
+
+
+        ### SMOOTHING
+        # import jax.scipy as jsp
+        # x = jnp.linspace(-3, 3, 7)
+        # window = jsp.stats.norm.pdf(x) * jsp.stats.norm.pdf(x[:, None])
+        # self.delta_z = jsp.signal.convolve(self.delta_z, window, mode='same')
+        ###
 
         if self.one_d:
             self.delta_z *= self.cube_len / (2*jnp.pi)
@@ -137,20 +156,39 @@ class Dens2bBatt:
             plt.title("z_re")
             plt.show()
 
-    def get_x_hi(self):
-        if self.one_d:
-            i = 0
-            for z in self.z_re:
-                if z < self.set_z:
-                    self.X_HI = self.X_HI.at[i].set(0)
-                else:
-                    self.X_HI = self.X_HI.at[i].set(1)
-                i += 1
-        elif self.two_d:
-            # vectorized version
-            self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+    def get_x_hi(self, tanh=True):
+        if tanh:
+            if self.two_d:
+                # plt.close()
+                # plt.imshow(jnp.real(self.z_re))
+                # plt.colorbar()
+                # plt.title("z_re")
+                # plt.colorbar()
+                # plt.show()
+                self.X_HI = jnp.real(jnp.tanh(self.set_z - self.z_re) + 1) / 2.
+                # id_print(self.X_HI)
+                # plt.close()
+                # plt.imshow(self.X_HI)
+                # plt.title("X_HI with tanh")
+                # plt.colorbar()
+                # plt.show()
+                # vectorized version
+                # self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+
         else:
-            raise NotImplementedError
+            if self.one_d:
+                i = 0
+                for z in self.z_re:
+                    if z < self.set_z:
+                        self.X_HI = self.X_HI.at[i].set(0)
+                    else:
+                        self.X_HI = self.X_HI.at[i].set(1)
+                    i += 1
+            elif self.two_d:
+                # vectorized version
+                self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+            else:
+                raise NotImplementedError
         return self.X_HI
 
     def get_temp_brightness(self):
