@@ -54,7 +54,17 @@ def circular_spec_normal(field, nbins, resolution, area, verbose=False):
     k_arr *= resolution # pixels/side length, changing to Mpc^-1
     k1, k2 = np.meshgrid(k_arr, k_arr)
     k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
-
+    # print("resolution")
+    # print(resolution)
+    # print("k vals")
+    # print("MAXIMUM")
+    # print(np.max(k_mag_full))
+    # print(np.max(k_arr))
+    # print(np.max(np.fft.fftfreq(curr_side_length)))
+    # print("MINIMUM")
+    # print(np.min(np.abs(k_mag_full)))
+    # print(np.min(np.abs(k_arr)))
+    # print(np.min(np.abs(np.fft.fftfreq(curr_side_length))))
     counts, bin_edges = np.histogram(k_mag_full, nbins)
 
     binned_power, _ = np.histogram(k_mag_full, nbins, weights=fft_data_squared)
@@ -77,7 +87,7 @@ def after_circular_spec_normal(field, nbins, resolution, area, verbose=False):
     curr_side_length = np.shape(field)[0]
     fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
     # fft_data_squared = np.real(fft_data * np.conj(fft_data)) # units pixels^4
-    fft_data_squared = np.abs(fft_data**2)
+    fft_data_squared = fft_data
     k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
     k_arr *= resolution # pixels/side length, changing to Mpc^-1
     k1, k2 = np.meshgrid(k_arr, k_arr)
@@ -91,7 +101,7 @@ def after_circular_spec_normal(field, nbins, resolution, area, verbose=False):
                  np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
 
     # kvals = 0.5 * (bin_edges[:-1] + bin_edges[1:]) # center of bins
-    pspec = binned_power / counts # average power in each bin
+    pspec = binned_power**2 / counts # average power in each bin
     if verbose:
         print(f"resolution, {1/resolution} mpc/pixel") # mpc/pixel
     pspec /= area # pixels^4 --> pixels^2
