@@ -65,9 +65,14 @@ class Dens2bBatt:
         elif self.three_d: # assuming 3D
             self.cube_len = len(self.density[:, 0, 0])
             self.integrand = self.density * (self.delta_pos**3) # weird FFT scaling for 3D
-            self.kx = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[0], self.delta_pos))
-            self.ky = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[1], self.delta_pos))
-            self.kz = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[2], self.delta_pos))
+
+            self.kx = jnp.fft.fftfreq(self.density.shape[0]) * resolution # convert from 1/pixel to 1/Mpc by multiplying by pixel/Mpc
+            self.ky = jnp.fft.fftfreq(self.density.shape[1]) * resolution# TO DO check
+            self.kz = jnp.fft.fftfreq(self.density.shape[2]) * resolution# TO DO check
+
+            # self.kx = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[0], self.delta_pos))
+            # self.ky = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[1], self.delta_pos))
+            # self.kz = jnp.fft.ifftshift(jnp.fft.fftfreq(self.density.shape[2], self.delta_pos))
 
             self.kx *= 2 * jnp.pi  # scaling k modes correctly
             self.ky *= 2 * jnp.pi  # scaling k modes correctly
@@ -105,13 +110,6 @@ class Dens2bBatt:
 
 
     def apply_filter(self):
-        seed = 1010
-        seed = jax.random.PRNGKey(seed)
-        # jax.random.multivariate_normal(seed, 0, [[0, 0], [1, 0], [0, 1]], dtype=)
-        # self.bias = jax.random.normal(seed, jnp.shape(self.k_mags)) * 10
-        # self.bias = jnp.fft.fftn(self.bias)
-        # w_z = self.b_mz(self.k_mags * self.delta_pos)
-
         w_z = self.b_mz(self.k_mags * self.delta_pos)
 
         self.density_k *= w_z
@@ -179,6 +177,7 @@ class Dens2bBatt:
                 # plt.colorbar()
                 # plt.show()
                 # vectorized version
+
 
         else:
             if self.one_d:

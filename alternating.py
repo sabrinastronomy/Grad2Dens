@@ -13,7 +13,7 @@ import os
 from matplotlib.ticker import MaxNLocator
 from jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import circular_spec_normal, after_circular_spec_normal
+from theory_matter_ps import circular_spec_normal, after_circular_spec_normal, spherical_p_spec_normal
 from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are precompiled
 
 ### defaults for paper plots
@@ -47,6 +47,7 @@ class InferDens(SwitchMinimizer):
                 new_direc = f"tanh_slope_{self.config_params.tanh_slope}_z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_old_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
             elif config_params.new_prior:
                 new_direc = f"tanh_slope_{self.config_params.tanh_slope}_z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
+
 
             if self.truth_field.any() != None:
                 new_direc = f"tanh_slope_{self.config_params.tanh_slope}_z_{self.config_params.z}_diff_start_" + new_direc
@@ -231,188 +232,200 @@ class InferDens(SwitchMinimizer):
         labels = np.load(self.plot_direc + f"/npy/labels.npy")
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
         self.num_k_modes = self.config_params.side_length
-        counts, pspec_truth, kvals = circular_spec_normal(truth_field, self.config_params.num_bins, self.resolution, self.area)
-        fig_pspec, axes_pspec = plt.subplots(2, 1, sharex=True, gridspec_kw={'height_ratios': [3, 1]})
-        fig_pspec.subplots_adjust(hspace=0)
 
-        axes_pspec[0].loglog(kvals, pspec_truth, label=r"$P_{\rm realization}$", c="purple")
-        # axes_pspec[0].errorbar(kvals, pspec_truth, yerr=np.sqrt(counts), ls="--", alpha=0.3)
-
-        axes_pspec[0].loglog(kvals, self.pspec_true(kvals), label=r"$P_{\rm theory}$", ls="--", c="black", zorder=100)
-        axes_pspec[0].set_xticklabels([])  # Remove x-tic labels for the first frame
-        axes_pspec[0].set_yticklabels([])  # Remove y-tic labels for the first frame
+        if self.dim == 3:
+            truth_field_full = np.copy(truth_field)
+            truth_field = truth_field[10, :, :]
+        if self.dim == 2:
+            counts, pspec_truth, kvals = circular_spec_normal(truth_field, self.config_params.num_bins, self.resolution, self.area)
+        elif self.dim == 3:
+            counts, pspec_truth, kvals = spherical_p_spec_normal(truth_field_full, self.config_params.num_bins, self.resolution, self.volume)
 
         label = labels[0].replace("_", " ")
         best_field = self.best_field_reshaped
-        counts, pspec_normal, kvals = circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
-        counts, pspec_pre, kvals = after_circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
-        poisson_rms = np.sqrt(np.abs(pspec_pre - pspec_normal)) / np.sqrt(counts)
-        axes_pspec[0].loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
-        axes_pspec[0].errorbar(kvals, pspec_normal, yerr=poisson_rms, alpha=0.3, color="blue")
 
 
-        axes_pspec[1].plot(kvals, pspec_normal/pspec_truth, c="k", ls="--")
-        # axes_pspec[1].set_title("log residuals between model pspec and theory pspec")
-        axes_pspec[0].set_xscale("log")
-        axes_pspec[0].set_yscale("log")
-        axes_pspec[0].legend()
-        axes_pspec[0].set_ylabel(fr"$P_{{\rm mm}}$ [$\rm Mpc^{{2}}$]")
-        # axes_pspec[1].set_ylabel(r"$P_{\rm realization}/P_{\rm theory}$")
-        axes_pspec[1].set_ylabel(r"$P_{\rm best}/P_{\rm mm}$")
-        axes_pspec[1].set_xlabel(r"k [$\rm Mpc^{-1}$]")
-        fig_pspec.savefig(self.plot_direc + "/plots/pspec.png", dpi=300)
-        plt.close(fig_pspec)
+        for i, k in enumerate([0, 1, 2]):
+            label = labels[k].replace("_", " ")
+            best_field = np.load(self.plot_direc + f"/npy/best_field_{self.z}_{k}.npy")
+            if self.dim == 2:
+                counts, pspec_normal, kvals = circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
+                counts, pspec_pre, kvals = after_circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
+                poisson_rms = np.sqrt(np.abs(pspec_pre - pspec_normal)) / np.sqrt(counts)
+                axes_pspec[0].loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
+
+            elif self.dim == 3:
+                counts, pspec_normal, kvals = spherical_p_spec_normal(best_field, self.num_bins, self.resolution, self.volume)
+
+            # counts, pspec_pre, kvals = self.p_spec_pre(best_field, self.num_bins)
+            # poisson_rms = np.sqrt(np.abs(pspec_normal - pspec_pre)) / np.sqrt(counts)
+            # print(poisson_rms)
+            # axes_pspec.errorbar(kvals, pspec_normal, yerr=poisson_rms, label=f"Iteration # {k} with {title}", ls="--", alpha=0.3)
+            if k == 3:
+                axes_pspec[0].loglog(kvals, pspec_normal,
+                              label=f"Best Field", alpha=0.5)
+            else:
+                axes_pspec[0].loglog(kvals, pspec_normal,
+                                     label=f"Iteration # {k} with {label}", alpha=0.5)
+                axes_pspec[0].errorbar(kvals, pspec_normal, yerr=poisson_rms, alpha=0.3, color="blue")
+
 
     def plot_panel(self, tick_font_size=7, normalize=False, log=False):
-
         figsize = (8, 12)
         rows = (self.config_params.iter_num_max // 2) + 1
         cols = 2
 
-        if normalize:
-            truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
-        else:
-            self.truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
-            self.data = np.load(self.plot_direc + f"/npy/data_field_{self.config_params.z}.npy")
+        # Load truth field and data
+        truth_field_path = f"/npy/truth_field_{self.config_params.z}.npy"
+        data_field_path = f"/npy/data_field_{self.config_params.z}.npy"
 
+        if normalize:
+            truth_field = np.load(self.plot_direc + truth_field_path)
+        else:
+            self.truth_field = np.load(self.plot_direc + truth_field_path)
+        self.data = np.load(self.plot_direc + data_field_path)
+
+        # Handle 3D data
+        if self.dim == 3:
+            truth_field = self.truth_field[10, :, :]
+            data = self.data[10, :, :]
+
+        # Create figure and axes
         data_fig, data_axes = plt.subplots(rows, cols, figsize=figsize)
         residuals_fig, residuals_axes = plt.subplots(rows, cols, figsize=figsize)
-
         fig, axes = plt.subplots(rows, cols, figsize=figsize)
+
         labels = np.load(self.plot_direc + f"/npy/labels.npy")
         k = 0
         for i in range(rows):
             for j in range(cols):
-                print("plotting", (i,j))
+                print("plotting", (i, j))
                 self.plot_title = labels[k]
+
                 if i == 0 and j == 0:
+                    # Special case for the first plot (truth field)
                     if normalize:
                         hist, bin_edges = np.histogram(truth_field, bins=100)
                         axes[i][j].plot(bin_edges[1:], hist)
                         axes[i][j].set_xscale('symlog')
-                        axes[i][j].set_xlabel("truth field density")
+                        axes[i][j].set_xlabel("Truth field density")
                         axes[i][j].set_xlim(-10**1, 10**2)
                         continue
                     else:
-                        if log:
-                            im = axes[i][j].imshow(self.truth_field, norm=matplotlib.colors.SymLogNorm(linthresh=0.01)) #, vmin=-1, vmax=np.max(self.truth_field)))
-                        else:
-                            im = axes[i][j].imshow(self.truth_field, vmin=-1, vmax=1)
-                        divider = make_axes_locatable(axes[i][j])
-                        cax = divider.append_axes('bottom', size='5%', pad=0.05)
-                        cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
-                        cbar.ax.tick_params(labelsize=tick_font_size)
-                        t = axes[i][j].text(20, self.config_params.side_length - 10, f"Truth Field", color="black", weight='bold')
+                        im = axes[i][j].imshow(
+                            self.truth_field, 
+                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None, 
+                            vmin=-1, vmax=1
+                        )
+                        t = axes[i][j].text(20, self.config_params.side_length - 10, "Truth Field", color="black", weight='bold')
                         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-                        axes[i][j].set_xticks([])
-                        axes[i][j].set_aspect('equal')
+                        self._add_colorbar(axes[i][j], im, tick_font_size, data_fig)
 
-                        if log:
-                            im = data_axes[i][j].imshow(self.data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)), cmap="oranges")
-                        else:
-                            im = data_axes[i][j].imshow(self.data, cmap="oranges")
-                        divider = make_axes_locatable(data_axes[i][j])
-                        cax = divider.append_axes('bottom', size='5%', pad=0.05)
-                        cbar = data_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
-                        cbar.ax.tick_params(labelsize=tick_font_size)
-                        t = data_axes[i][j].text(20, self.config_params.side_length - 10, f"Truth Data", color="black", weight='bold')
+                        # Data field plot
+                        im = data_axes[i][j].imshow(
+                            self.data, 
+                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)) if log else None,
+                            cmap="oranges"
+                        )
+                        t = data_axes[i][j].text(20, self.config_params.side_length - 10, "Data Field", color="black", weight='bold')
                         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-                        data_axes[i][j].set_xticks([])
-                        data_axes[i][j].set_aspect('equal')
+                        self._add_colorbar(data_axes[i][j], im, tick_font_size, data_fig)
 
-                        if log:
-                            im = residuals_axes[i][j].imshow(np.zeros_like(self.truth_field), norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
-                        else:
-                            im = residuals_axes[i][j].imshow(np.zeros_like(self.truth_field))
-
-                        divider = make_axes_locatable(residuals_axes[i][j])
-                        cax = divider.append_axes('bottom', size='5%', pad=0.05)
-                        cbar = residuals_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
-                        cbar.ax.tick_params(labelsize=tick_font_size)
-                        t = residuals_axes[i][j].text(20, self.config_params.side_length - 10, f"Zero Residuals", color="black", weight='bold')
+                        # Residuals plot (zeros)
+                        im = residuals_axes[i][j].imshow(
+                            np.zeros_like(self.truth_field),
+                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None
+                        )
+                        t = residuals_axes[i][j].text(20, self.config_params.side_length - 10, "Zero Residuals", color="black", weight='bold')
                         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-                        residuals_axes[i][j].set_xticks([])
-                        residuals_axes[i][j].set_aspect('equal')
+                        self._add_colorbar(residuals_axes[i][j], im, tick_font_size, residuals_fig)
 
                         continue
 
+                # Load the best field for the current iteration
                 best_field = np.load(self.plot_direc + f"/npy/best_field_{self.config_params.z}_{k}.npy")
+                if self.dim == 3:
+                    best_field = best_field[10, :, :]
+
+                # Plotting based on normalization or not
                 if normalize:
                     hist, bin_edges = np.histogram(best_field, bins=1000)
                     axes[i][j].plot(bin_edges[1:], hist)
                     axes[i][j].set_xscale('symlog')
-                    axes[i][j].set_xlabel("density")
-                    axes[i][j].set_xlim(-10**1, 10 **2)
+                    axes[i][j].set_xlabel("Density")
+                    axes[i][j].set_xlim(-10**1, 10**2)
                 else:
-                    if log:
-                        im = axes[i][j].imshow(best_field,norm=matplotlib.colors.SymLogNorm(linthresh=0.01)) #, vmin=-1, vmax=jnp.max(self.truth_field)))
-                    else:
-                        im = axes[i][j].imshow(best_field, vmin=-1, vmax=1)
-                    divider = make_axes_locatable(axes[i][j])
-                    cax = divider.append_axes('bottom', size='5%', pad=0.05)
-                    cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
-                    cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = axes[i][j].text(20, self.config_params.side_length - 10, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
-                    t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-                    axes[i][j].set_xticks([])
-                    axes[i][j].set_aspect('equal')
+                    im = axes[i][j].imshow(
+                        best_field,
+                        norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None,
+                        vmin=-1, vmax=1
+                    )
+                    self._add_colorbar(axes[i][j], im, tick_font_size, fig)
+                    self._add_text(axes[i][j], k, "Iteration", self.plot_title)
 
-                    if log:
-                        im = residuals_axes[i][j].imshow((best_field - self.truth_field)/self.truth_field,
-                                                     norm=matplotlib.colors.SymLogNorm(linthresh=0.01))
-                    else:
-                        im = residuals_axes[i][j].imshow(((best_field - self.truth_field)/self.truth_field)**2)
-                    divider = make_axes_locatable(residuals_axes[i][j])
-                    cax = divider.append_axes('bottom', size='5%', pad=0.05)
-                    cbar = residuals_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
-                    cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = residuals_axes[i][j].text(20, self.config_params.side_length - 10, f"(Current-Truth) Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
-                    t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-                    residuals_axes[i][j].set_xticks([])
-                    residuals_axes[i][j].set_aspect('equal')
+                    # Residuals plot
+                    residuals = (best_field - self.truth_field) / self.truth_field
+                    im = residuals_axes[i][j].imshow(
+                        residuals if log else residuals**2,
+                        norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None
+                    )
+                    self._add_colorbar(residuals_axes[i][j], im, tick_font_size, residuals_fig)
+                    self._add_text(residuals_axes[i][j], k, "(Current-Truth) Iteration", self.plot_title)
 
+                    # Data panel for current iteration
                     batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, tanh_slope=self.config_params.tanh_slope)
                     data = batt_model_instance.temp_brightness
-                    if log:
-                        im = data_axes[i][j].imshow(data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1))
-                    else:
-                        im = data_axes[i][j].imshow(data)
-                    divider = make_axes_locatable(data_axes[i][j])
-                    cax = divider.append_axes('bottom', size='5%', pad=0.05)
-                    cbar = data_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
-                    cbar.ax.tick_params(labelsize=tick_font_size)
-                    t = data_axes[i][j].text(20, self.config_params.side_length - 10, f"Iteration #{k} \nwith " + self.plot_title, color="black", weight='bold')
-                    t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
-                    data_axes[i][j].set_xticks([])
-                    data_axes[i][j].set_aspect('equal')
+                    im = data_axes[i][j].imshow(
+                        data,
+                        norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1) if log else None
+                    )
+                    self._add_colorbar(data_axes[i][j], im, tick_font_size, data_fig)
+                    self._add_text(data_axes[i][j], k, "Iteration", self.plot_title)
 
                 k += 1
-                print("self.iter_num_max")
-                print(self.config_params.iter_num_max)
-                print("k")
-                print(k)
                 if k == self.config_params.iter_num_max:
                     break
-            if normalize:
-                fig.savefig(self.plot_direc + "/plots/normalize_field_panel_iterations.png", dpi=300)
-            else:
-                fig.savefig(self.plot_direc + "/plots/field_panel_iterations.png", dpi=300)
-                data_fig.savefig(self.plot_direc + "/plots/data_panel_iterations.png", dpi=300)
-                residuals_fig.savefig(self.plot_direc + "/plots/residuals_panel_iterations.png", dpi=300)
+
+            # Save the figures
+            fig.savefig(self.plot_direc + "/plots/field_panel_iterations.png", dpi=300)
+            data_fig.savefig(self.plot_direc + "/plots/data_panel_iterations.png", dpi=300)
+            residuals_fig.savefig(self.plot_direc + "/plots/residuals_panel_iterations.png", dpi=300)
 
             plt.close(data_fig)
             plt.close(fig)
             plt.close(residuals_fig)
 
+    # Helper functions to add colorbar and text
+    def _add_colorbar(self, ax, im, tick_font_size, fig):
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('bottom', size='5%', pad=0.05)
+        cbar = fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
+        cbar.ax.tick_params(labelsize=tick_font_size)
+
+    def _add_text(self, ax, iteration, title_prefix, title_suffix):
+        t = ax.text(20, self.config_params.side_length - 10, f"{title_prefix} #{iteration} \nwith {title_suffix}", color="black", weight='bold')
+        t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
+
+
     def calc_prior_likelihood(self, field):
         field = jnp.reshape(field, self.size)
-        assert np.shape(field) == (self.side_length, self.side_length)
+        if self.dim == 3:
+            assert np.shape(field) == (self.side_length, self.side_length, self.side_length)
+        elif self.dim == 2:
+            assert np.shape(field) == (self.side_length, self.side_length)
+        else:
+            exit()
         # note param_init was passed in and is a constant
         discrepancy = self.data - self.bias_field(field)
         likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
         #### prior
         if self.new_prior:
             counts, power_curr, bin_means = circular_spec_normal(field, self.num_bins, self.resolution, self.area)
+            if self.dim == 2:
+                counts, power_curr, bin_means = circular_spec_normal(field, self.num_bins, self.resolution, self.area)
+            elif self.dim == 3:
+                counts, power_curr, bin_means = spherical_p_spec_normal(field, self.num_bins, self.resolution, self.volume)
+            # sigma = counts ** 2
             mask_high_k = bin_means < 5
             x = (self.pspec_box - power_curr).flatten()
             prior = np.sum(x[mask_high_k]**2)
@@ -553,6 +566,9 @@ class InferDens(SwitchMinimizer):
 
     def check_field(self, field, title, normalize=False, save=True, show=False, iteration_number=-1):
         # plotting
+        if self.dim == 3:
+            # take slice of field
+            field = field[10, :, :]
         fig, axes = plt.subplots()
         if normalize:
             field = (field - jnp.min(field)) / (jnp.max(field) - jnp.min(field))
@@ -708,3 +724,4 @@ if __name__ == "__main__":
             samp.plot_3_panel()
             samp.plot_mask()
             samp.plot_pspecs()
+

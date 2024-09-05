@@ -16,7 +16,7 @@ from jax.scipy.optimize import \
 # from jax.example_libraries import optimizers as jaxopt
 import jaxopt
 import theory_matter_ps
-from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal
+from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal, after_spherical_p_spec_normal
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
@@ -57,6 +57,7 @@ class SwitchMinimizer:
         self.resolution = self.config_params.side_length / self.config_params.physical_side_length  # number of pixels / physical side length
         print("resolution ", self.resolution)
         self.area = self.config_params.side_length ** 2
+        self.volume = self.side_length**3
         # kmax = 2 * jnp.pi / self.physical_side_length * (self.side_length / 2)
         kmax = 50
         if self.config_params.use_truth_mm:
@@ -114,6 +115,9 @@ class SwitchMinimizer:
                                                                                          self.config_params.num_bins,
                                                                                          self.resolution,
                                                                                          self.area)
+            if self.config_params.dim == 3:
+                counts, self.p_spec_truth_realization, k_vals_all = spherical_p_spec_normal(self.truth_field, self.num_bins, self.resolution, self.volume)
+
             if self.config_params.use_truth_mm:
                 self.truth_final_pspec = self.pspec_true(k_vals_all)
 
@@ -240,6 +244,7 @@ class SwitchMinimizer:
             assert jnp.shape(self.best_field) == (self.config_params.side_length ** self.config_params.dim,)
             self.preserve_original = self.preserve_original.at[self.ionized_indices_flattened].set(
                 self.best_field[self.ionized_indices_flattened])
+
             self.best_field_reshaped = jnp.array(jnp.reshape(self.preserve_original, self.size))
         else:
             self.best_field_reshaped = jnp.array(jnp.reshape(self.best_field, self.size))
@@ -257,6 +262,7 @@ class SwitchMinimizer:
         self.priors = jnp.empty(1000)
         opt_result = jaxopt.LBFGS(fun=self.chi_sq_jax, tol=1e-12, maxiter=1000, maxls=1000,
                                   stop_if_linesearch_fails=True)
+
 
         params, state = opt_result.run(self.s_field)
         # print('state options')
@@ -292,6 +298,7 @@ class SwitchMinimizer:
 
             assert jnp.shape(copy_guess) == (self.config_params.side_length ** self.config_params.dim,)
             assert jnp.shape(full_guess) == (self.config_params.side_length ** self.config_params.dim,)
+
 
             full_guess = full_guess.at[self.ionized_indices_flattened].set(copy_guess[self.ionized_indices_flattened])
             candidate_field = jnp.reshape(full_guess, self.size)
@@ -329,17 +336,24 @@ class SwitchMinimizer:
             imag_prior = jnp.dot(fourier_nums_imag ** 2,
                                  2 / self.pspec_indep_nums_im)  # Half variance for imag
 
-            prior = real_prior + imag_prior
-
+            prior = (real_prior + imag_prior) / self.side_length**self.dim
         elif self.config_params.new_prior:
-
+            if self.dim == 2:
+                counts, power_curr, k_values = circular_spec_normal(candidate_field, self.num_bins, self.resolution, self.area)
+            elif self.dim == 3:
+                counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.volume)
+                after_counts, after_power_curr, after_k_values = after_spherical_p_spec_normal(candidate_field, self.num_bins, self.resolution, self.volume)
+            x = (self.truth_final_pspec - power_curr).flatten()
             sigma = counts ** 2
             prior = jnp.mean((x**2) * sigma)
-
-        if self.prior_off:
-            prior = 0
-        elif self.likelihood_off:
+            print("prior multiplies sigma")
+        
+        if self.likelihood_off:
+            # likelihood = 10**-2 *  likelihood
             likelihood = 0
+        elif self.prior_off:
+            prior = 0
+
 
         # prior *= 1e6
         # prior =0
@@ -352,6 +366,7 @@ class SwitchMinimizer:
         self.final_likelihood_prior = prior + likelihood
 
         if self.config_params.verbose:
+
             print("self.likelihood_off", self.likelihood_off)
             print("self.prior_off", self.prior_off)
             print("prior: ")
