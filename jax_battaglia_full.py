@@ -17,12 +17,12 @@ class Dens2bBatt:
     """
     This class follows the Battaglia et al (2013) model to go from a density field to a temperature brightness field.
     """
-    def __init__(self, density, delta_pos, set_z, flow=True, debug=False, b_0=0.593, alpha=0.564, k_0=0.185): # , b_0=0.593, alpha=0.564, k_0=0.185):
-        # go into k-space
+    def __init__(self, density, delta_pos, set_z, flow=True, debug=False , b_0=0.593, alpha=0.564, k_0=0.185, tanh_slope=2): # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
         self.debug = debug
         self.b_0 = b_0
         self.alpha = alpha
         self.k_0 = k_0
+        self.tanh_slope = tanh_slope
         if density.ndim == 1:
             self.one_d = True
             self.two_d = False
@@ -108,12 +108,12 @@ class Dens2bBatt:
         seed = 1010
         seed = jax.random.PRNGKey(seed)
         # jax.random.multivariate_normal(seed, 0, [[0, 0], [1, 0], [0, 1]], dtype=)
-        # self.bias = jax.random.normal(seed, jnp.shape(self.k_mags))
+        # self.bias = jax.random.normal(seed, jnp.shape(self.k_mags)) * 10
         # self.bias = jnp.fft.fftn(self.bias)
         # w_z = self.b_mz(self.k_mags * self.delta_pos)
 
         w_z = self.b_mz(self.k_mags * self.delta_pos)
-        #
+
         self.density_k *= w_z
         if self.one_d:
             self.density_k *= self.delta_k
@@ -165,7 +165,13 @@ class Dens2bBatt:
                 # plt.title("z_re")
                 # plt.colorbar()
                 # plt.show()
-                self.X_HI = jnp.real(jnp.tanh(self.set_z - self.z_re) + 1) / 2.
+                self.z_re = jnp.real(self.z_re)
+                self.X_HI = (jnp.tanh(self.tanh_slope*(self.set_z - self.z_re)) + 1) / 2.
+                # self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+
+                # self.X_HI += jnp.abs(jnp.min(self.X_HI))
+                # print("minimum of xhi")
+                # print(jnp.min(self.X_HI))
                 # id_print(self.X_HI)
                 # plt.close()
                 # plt.imshow(self.X_HI)
@@ -173,7 +179,6 @@ class Dens2bBatt:
                 # plt.colorbar()
                 # plt.show()
                 # vectorized version
-                # self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
 
         else:
             if self.one_d:

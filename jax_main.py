@@ -20,6 +20,8 @@ from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
+config.update("jax_debug_nans", True)
+
 
 import matplotlib.pyplot as plt
 import powerbox as pbox
@@ -132,6 +134,9 @@ class SwitchMinimizer:
             plt.close()
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
+
+
+
         else:  # data included in initialization of class
             # print("Using previously generated data and truth field.")
             assert (jnp.shape(self.config_params.truth_field)[0] != 0)
@@ -141,11 +146,16 @@ class SwitchMinimizer:
             print("Not yet implemented")
             exit()
         ###############################################################################################################
-        self.ionized_indices = jnp.argwhere(self.data.flatten() == 0).flatten()
-        self.neutral_indices = jnp.argwhere(self.data.flatten() != 0).flatten()
+        # print("Ionized pixels if < 15")
+        self.ionized_indices = jnp.argwhere(self.data < 5)
+        self.neutral_indices = jnp.argwhere(self.data > 5)
 
-        self.ionized_indices_mask = (self.data == 0).flatten()
-        self.neutral_indices_mask = (self.data != 0).flatten()
+        self.ionized_indices_flattened = jnp.argwhere(self.data.flatten() < 5).flatten()
+        self.neutral_indices_flattened = jnp.argwhere(self.data.flatten() > 5).flatten()
+
+        self.ionized_indices_mask = (self.data < 5).flatten()
+        self.neutral_indices_mask = (self.data > 5).flatten()
+        # self.truth_field = self.truth_field.at[self.ionized_indices].set(0)
 
         # generate diagonal matrices for chi-squared and adding noise if selected #####################################
         self.rms = 0.1
@@ -209,12 +219,15 @@ class SwitchMinimizer:
             print("USING OLD STARTING FIELD.")
         if use_old_field:
             self.s_field = jnp.copy(self.best_field_reshaped).flatten()
-            gaussian_noise = np.random.normal(size=(self.config_params.side_length, self.config_params.side_length)).flatten()
 
-            # if self.iter_num_big == 1:
-            #     self.s_field = self.s_field.at[self.ionized_indices_mask].set(gaussian_noise[self.ionized_indices_mask])
         if self.mask_ionized:
             self.preserve_original = jnp.copy(self.s_field)
+
+        # print("trying with assumption that we know neutral pixels")
+        # truth_field_flattened = self.truth_field.flatten()
+        # self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
+
+        # # print("-----------------")
         self.run_grad_descent()
 
     def run_grad_descent(self):
@@ -225,8 +238,8 @@ class SwitchMinimizer:
         if self.mask_ionized:
             # put back the ionized regions which are the only things allowed to change
             assert jnp.shape(self.best_field) == (self.config_params.side_length ** self.config_params.dim,)
-            self.preserve_original = self.preserve_original.at[self.ionized_indices].set(
-                self.best_field[self.ionized_indices])
+            self.preserve_original = self.preserve_original.at[self.ionized_indices_flattened].set(
+                self.best_field[self.ionized_indices_flattened])
             self.best_field_reshaped = jnp.array(jnp.reshape(self.preserve_original, self.size))
         else:
             self.best_field_reshaped = jnp.array(jnp.reshape(self.best_field, self.size))
@@ -246,8 +259,8 @@ class SwitchMinimizer:
                                   stop_if_linesearch_fails=True)
 
         params, state = opt_result.run(self.s_field)
-        print('state options')
-        print(state)
+        # print('state options')
+        # print(state)
         self.final_func_val = state.value
 
         print("How many iterations did it take?")
@@ -274,23 +287,24 @@ class SwitchMinimizer:
         """
 
         if self.mask_ionized:
-            print("Masking ionized")
             copy_guess = jnp.copy(guess.flatten())
             full_guess = jnp.copy(self.preserve_original.flatten())
 
             assert jnp.shape(copy_guess) == (self.config_params.side_length ** self.config_params.dim,)
             assert jnp.shape(full_guess) == (self.config_params.side_length ** self.config_params.dim,)
 
-            full_guess = full_guess.at[self.ionized_indices].set(copy_guess[self.ionized_indices])
+            full_guess = full_guess.at[self.ionized_indices_flattened].set(copy_guess[self.ionized_indices_flattened])
             candidate_field = jnp.reshape(full_guess, self.size)
         else:
             candidate_field = jnp.reshape(guess, self.size)
+
 
         # note param_init was passed in and is a constant
         discrepancy = self.data - self.bias_field(candidate_field)
 
         #### get likelihood for all cases #############################################################################
-        likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
+        x = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+        likelihood = jnp.mean(x)
         ###############################################################################################################
         # want circular/spherical pspec regardless of which prior we use
         if self.config_params.dim == 2:
@@ -320,78 +334,22 @@ class SwitchMinimizer:
         elif self.config_params.new_prior:
 
             sigma = counts ** 2
-            # prior_gauss = 0.5 - param_guess
-            prior = np.sum(x**2) + np.mean(x)
-            # prior = np.sum(x**2) - np.mean(x)
-            # prior = prior_gauss**2
-            # sig = jnp.full_like(candidate_field, 0.1)
-            # prior_gauss = jnp.sum(jnp.dot(candidate_field**2, 1/sig))
-            # prior += prior_gauss
-            # plt.close()
-            # plt.title("individual candidate")
-            # plt.plot(k_values, self.weights)
-            # plt.show()
-            # plt.close()
+            prior = jnp.mean((x**2) * sigma)
 
-        # self.likelihood_all = self.likelihood_all.at[self.iter_num].set(likelihood)
-        # self.prior_all = self.prior_all.at[self.iter_num].set(prior)
-        # id_print(likelihood)
-        if self.likelihood_off:
-            likelihood = 0
-            # likelihood = np.mean(x)
-            # likelihood = jax.lax.cond(jnp.log10(likelihood) < 7.5, lambda x: likelihood, lambda x: 0., 1)
-                # print("likelihood turned on")
-        elif self.prior_off:
+        if self.prior_off:
             prior = 0
-            # print("trying mean prior")
-            # prior = np.mean(x)
-            # id_print(prior)
-        # else:
-            # # what if we just focus on high k modes for a sec
-            # k_val_mask = jnp.where(k_values > 2., 1, 0)
-            # # prior = np.sum(x[k_val_mask]**2)
-            # print("prior")
-            # id_print(prior)
-            # prior = 0
-            # if self.iter_num % 2 == 0:
-            #     print("prior entered")
-            #     id_print(likelihood)
-            #     prior = 0
-            # else:
-            #     print("likelihood entered")
-            #     id_print(prior)
-            #     likelihood = 0
+        elif self.likelihood_off:
+            likelihood = 0
 
-            # mag_likelihood = jnp.log10(likelihood)
-            # mag_prior = jnp.log10(prior)
-            # likelihood /= 10**mag_likelihood
-            # prior /= 10**mag_prior
-            # id_print(likelihood)
-            # id_print(prior)
+        # prior *= 1e6
+        # prior =0
+        print("likelihood")
+        id_print(likelihood)
 
-        # if self.weighted_prior:
-        #     self.likelihood = likelihood
-        #     self.prior = prior
-        #     likelihood = likelihood/jnp.log10(likelihood)
-        #     prior = prior/jnp.log10(prior)
-        #     self.final_likelihood_prior = likelihood + prior
-        # else:
-        #     mean_curr = jnp.abs(jnp.mean(candidate_field))
-        # print("mean_curr")
-        # id_print(mean_curr)
+        print("prior")
+        id_print(prior)
 
-        # prior_extra = jnp.where(mean_curr < 1., 0, 1e5)
-
-        # if mean_prior < 1.:
-        #     prior_extra = 0
-        # else:
-        #     prior_extra = 1e5
-        # self.likelihood = likelihood
-        # self.prior = prior
         self.final_likelihood_prior = prior + likelihood
-        #
-        # self.priors = self.priors.at[self.iter_num].set(prior)
-        # self.likelihoods = self.likelihoods.at[self.iter_num].set(likelihood)
 
         if self.config_params.verbose:
             print("self.likelihood_off", self.likelihood_off)
@@ -403,8 +361,7 @@ class SwitchMinimizer:
             print("current final posterior")
             id_print(self.final_likelihood_prior)
         self.iter_num += 1
-        # print("current final posterior")
-        # id_print(self.final_likelihood_prior)
+
         return self.final_likelihood_prior
 
     def create_better_normal_field(self, seed):
@@ -446,13 +403,13 @@ class SwitchMinimizer:
     def ft_jax(self, x):
         return jnp.sum(jnp.abs(jnp.fft.fft(x)) ** 2)
 
-    def bias_field(self, field, b_0=0.593):
+    def bias_field(self, field, b_0=0.5):
         """
         Used to bias field or convert to temperature brightness.
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
-        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.config_params.z, flow=True, b_0=b_0)
+        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.config_params.z, flow=True, b_0=b_0, tanh_slope=self.config_params.tanh_slope)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
 

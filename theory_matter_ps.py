@@ -54,7 +54,17 @@ def circular_spec_normal(field, nbins, resolution, area, verbose=False):
     k_arr *= resolution # pixels/side length, changing to Mpc^-1
     k1, k2 = np.meshgrid(k_arr, k_arr)
     k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
-
+    # print("resolution")
+    # print(resolution)
+    # print("k vals")
+    # print("MAXIMUM")
+    # print(np.max(k_mag_full))
+    # print(np.max(k_arr))
+    # print(np.max(np.fft.fftfreq(curr_side_length)))
+    # print("MINIMUM")
+    # print(np.min(np.abs(k_mag_full)))
+    # print(np.min(np.abs(k_arr)))
+    # print(np.min(np.abs(np.fft.fftfreq(curr_side_length))))
     counts, bin_edges = np.histogram(k_mag_full, nbins)
 
     binned_power, _ = np.histogram(k_mag_full, nbins, weights=fft_data_squared)

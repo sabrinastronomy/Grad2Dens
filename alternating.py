@@ -44,12 +44,12 @@ class InferDens(SwitchMinimizer):
         if config_params.plot_direc == "":
             self.perc_ionized = round(len(self.ionized_indices) / self.config_params.side_length**self.config_params.dim, 1)
             if config_params.old_prior:
-                new_direc = f"z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_old_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
+                new_direc = f"tanh_slope_{self.config_params.tanh_slope}_z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_old_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
             elif config_params.new_prior:
-                new_direc = f"z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
+                new_direc = f"tanh_slope_{self.config_params.tanh_slope}_z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
 
             if self.truth_field.any() != None:
-                new_direc = f"z_{self.config_params.z}_diff_start_" + new_direc
+                new_direc = f"tanh_slope_{self.config_params.tanh_slope}_z_{self.config_params.z}_diff_start_" + new_direc
             try:
                 os.mkdir(new_direc)
                 os.mkdir(new_direc + "/plots")
@@ -68,7 +68,7 @@ class InferDens(SwitchMinimizer):
             self.make_1_1_plots()
 
     def check_threshold(self):
-        batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z,flow=True)
+        batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True, tanh_slope=self.config_params.tanh_slope)
         temp_model_brightness = batt_model_instance.temp_brightness
         root_mse_curr = self.root_mse(self.data, temp_model_brightness)
         return root_mse_curr
@@ -95,6 +95,15 @@ class InferDens(SwitchMinimizer):
                     self.mask_ionized = False
                 ####
                 print("Initial run")
+                if self.likelihood_off:
+                    print("Likelihood off")
+                else:
+                    print("Likelihood ON")
+
+                if self.prior_off:
+                    print("Prior off")
+                else:
+                    print("Prior ON")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=False, iter_num_big=iter_num_big)
                 ####
                 self.check_field(self.s_field_original, "starting field", show=False, save=True,
@@ -103,6 +112,7 @@ class InferDens(SwitchMinimizer):
                                  iteration_number=-1)
                 self.check_field(self.data, "data (brightness temperature)", show=False, save=True,
                                  iteration_number=-1)
+
                 np.save(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy", self.truth_field)
                 np.save(self.plot_direc + f"/npy/data_field_{self.config_params.z}.npy", self.data)
             else:
@@ -135,7 +145,7 @@ class InferDens(SwitchMinimizer):
                 print("Something is wrong as neither the likelihood or prior is on.")
                 exit()
 
-            batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True)
+            batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True, tanh_slope=self.config_params.tanh_slope)
             temp_model_brightness = batt_model_instance.temp_brightness
 
             self.check_field(temp_model_brightness, "brightness temperature", show=True, save=True,
@@ -146,7 +156,18 @@ class InferDens(SwitchMinimizer):
             np.save(self.plot_direc + f"/npy/best_field_{self.config_params.z}_{iter_num_big}.npy", self.best_field_reshaped)
             self.labels.append(self.plot_title) # saving configuration of each iteration in list
             np.save(self.plot_direc + f"/npy/labels.npy", self.labels)
+
+            print("iter num big")
+            print(iter_num_big)
+            print("likelihood off")
+            print(self.likelihood_off)
+            print("prior_off")
+            print(self.prior_off)
+            print("mask ionized")
+            print(self.mask_ionized)
+
             rest_num += 1 # INCREASE REST NUM ONE
+
 
             # saving information only at the end of a round of likelihood/prior off
             # getting 0th ionized/neutral index and saving to array
@@ -178,6 +199,14 @@ class InferDens(SwitchMinimizer):
         np.save(self.plot_direc + f"/npy/best_field_{self.config_params.z}_FINAL.npy",
                 self.best_field_reshaped)
 
+    def plot_mask(self):
+        self.masked_field = np.copy(self.best_field)
+        self.masked_field[self.neutral_indices_mask] = 0
+        reshaped_masked = jnp.reshape(self.masked_field, self.size)
+        plt.imshow(reshaped_masked)
+        plt.title("best field masked during optimization")
+        plt.savefig(self.plot_direc + f"/mask.png")
+
     def plot_pixels(self):
         fig_track, axes_track = plt.subplots()
         like_fig_track, like_axes_track = plt.subplots()
@@ -202,29 +231,26 @@ class InferDens(SwitchMinimizer):
         labels = np.load(self.plot_direc + f"/npy/labels.npy")
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
         self.num_k_modes = self.config_params.side_length
-        _, pspec_truth, kvals = circular_spec_normal(truth_field, self.config_params.num_bins, self.resolution, self.area)
+        counts, pspec_truth, kvals = circular_spec_normal(truth_field, self.config_params.num_bins, self.resolution, self.area)
         fig_pspec, axes_pspec = plt.subplots(2, 1, sharex=True, gridspec_kw={'height_ratios': [3, 1]})
         fig_pspec.subplots_adjust(hspace=0)
 
         axes_pspec[0].loglog(kvals, pspec_truth, label=r"$P_{\rm realization}$", c="purple")
-        # axes_pspec[0].loglog(kvals, self.pspec_true(kvals), label=r"$P_{\rm theory}$", ls="--", c="black", zorder=100)
+        # axes_pspec[0].errorbar(kvals, pspec_truth, yerr=np.sqrt(counts), ls="--", alpha=0.3)
+
+        axes_pspec[0].loglog(kvals, self.pspec_true(kvals), label=r"$P_{\rm theory}$", ls="--", c="black", zorder=100)
         axes_pspec[0].set_xticklabels([])  # Remove x-tic labels for the first frame
         axes_pspec[0].set_yticklabels([])  # Remove y-tic labels for the first frame
 
-        for i, k in enumerate([0, 1]):
-            label = labels[k].replace("_", " ")
-            best_field = np.load(self.plot_direc + f"/npy/best_field_{self.config_params.z}_{k}.npy")
-            counts, pspec_normal, kvals = circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
-            counts, pspec_pre, kvals = after_circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
-            poisson_rms = np.sqrt(np.abs(pspec_pre - pspec_normal)) / np.sqrt(counts)
-            if k == 3:
-                axes_pspec[0].loglog(kvals, pspec_normal,
-                              label=f"Best Field", alpha=0.5)
-            else:
-                axes_pspec[0].errorbar(kvals, pspec_normal, yerr=poisson_rms, ls="--", alpha=0.3, label=f"Iteration # {k} with {label}")
+        label = labels[0].replace("_", " ")
+        best_field = self.best_field_reshaped
+        counts, pspec_normal, kvals = circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
+        counts, pspec_pre, kvals = after_circular_spec_normal(best_field, self.config_params.num_bins, self.resolution, self.area)
+        poisson_rms = np.sqrt(np.abs(pspec_pre - pspec_normal)) / np.sqrt(counts)
+        axes_pspec[0].loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
+        axes_pspec[0].errorbar(kvals, pspec_normal, yerr=poisson_rms, alpha=0.3, color="blue")
 
-                # axes_pspec[0].loglog(kvals, pspec_normal,
-                #                      label=f"Iteration # {k} with {label}", alpha=0.5)
+
         axes_pspec[1].plot(kvals, pspec_normal/pspec_truth, c="k", ls="--")
         # axes_pspec[1].set_title("log residuals between model pspec and theory pspec")
         axes_pspec[0].set_xscale("log")
@@ -238,6 +264,7 @@ class InferDens(SwitchMinimizer):
         plt.close(fig_pspec)
 
     def plot_panel(self, tick_font_size=7, normalize=False, log=False):
+
         figsize = (8, 12)
         rows = (self.config_params.iter_num_max // 2) + 1
         cols = 2
@@ -260,7 +287,7 @@ class InferDens(SwitchMinimizer):
                 self.plot_title = labels[k]
                 if i == 0 and j == 0:
                     if normalize:
-                        hist, bin_edges = np.histogram(truth_field, bins=1000)
+                        hist, bin_edges = np.histogram(truth_field, bins=100)
                         axes[i][j].plot(bin_edges[1:], hist)
                         axes[i][j].set_xscale('symlog')
                         axes[i][j].set_xlabel("truth field density")
@@ -281,9 +308,9 @@ class InferDens(SwitchMinimizer):
                         axes[i][j].set_aspect('equal')
 
                         if log:
-                            im = data_axes[i][j].imshow(self.data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)))
+                            im = data_axes[i][j].imshow(self.data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)), cmap="oranges")
                         else:
-                            im = data_axes[i][j].imshow(self.data)
+                            im = data_axes[i][j].imshow(self.data, cmap="oranges")
                         divider = make_axes_locatable(data_axes[i][j])
                         cax = divider.append_axes('bottom', size='5%', pad=0.05)
                         cbar = data_fig.colorbar(im, cax=cax, fraction=0.046, pad=0.04, orientation="horizontal")
@@ -344,7 +371,7 @@ class InferDens(SwitchMinimizer):
                     residuals_axes[i][j].set_xticks([])
                     residuals_axes[i][j].set_aspect('equal')
 
-                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True)
+                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, tanh_slope=self.config_params.tanh_slope)
                     data = batt_model_instance.temp_brightness
                     if log:
                         im = data_axes[i][j].imshow(data, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1))
@@ -460,23 +487,69 @@ class InferDens(SwitchMinimizer):
 
     def plot_3_panel(self):
         """This method gives a nice three panel plot showing the data, predicted field, and truth field"""
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 4))
-        im1 = ax1.imshow(self.data)
-        ax1.set_title("Observed data")
-        im2 = ax2.imshow(self.opt_result)
-        ax2.set_title("Inferred density")
-        im3 = ax3.imshow(self.truth_field)
-        ax3.set_title("Truth")
-        fig.tight_layout()
-        fig.colorbar(im1, ax=ax1)
-        fig.colorbar(im2, ax=ax2)
-        fig.colorbar(im3, ax=ax3)
-        ## getting plot title
-        if self.noise_off:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.z}_no_noise_.png", dpi=300)
-        else:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.z}_w_noise.png", dpi=300)
+        from scipy.ndimage import gaussian_filter
+        from matplotlib import colors
+
+        print("MINIMUM VALUE OF DATA FIELD")
+        print(jnp.min(self.data))
         plt.close()
+        plt.hist(self.data, bins=100, density=True, histtype="stepfilled")
+        plt.title("21cm values")
+        plt.savefig(f"{self.plot_direc}/plots/data_hist.png")
+        # Normalize the color range for Inferred density and Truth
+        # norm_shared = colors.Normalize(vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+
+        residual = self.truth_field - self.best_field_reshaped
+
+        norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+                                       vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+
+        norm_shared_residual = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=np.min(residual),
+                                       vmax=np.max(residual))
+
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(15, 5))
+
+        # Plotting Observed data
+        im1 = ax1.imshow(self.data, cmap="plasma")
+        ax1.set_title("Observed data")
+        ax1.set_xlabel("Pixel #")
+
+        # Plotting Inferred density
+        # smoothed_field = gaussian_filter(self.best_field_reshaped, sigma=1)
+        im2 = ax2.imshow(self.best_field_reshaped, norm=norm_shared)
+        ax2.set_title("Inferred density")
+        ax2.set_xlabel("Pixel #")
+
+        # Plotting Truth
+        im3 = ax3.imshow(self.truth_field, norm=norm_shared)
+        ax3.set_title("Truth")
+        ax3.set_xlabel("Pixel #")
+
+        # Plotting Residual (truth-best)
+        im4 = ax4.imshow(residual, norm=norm_shared_residual)
+        ax4.set_title("Residual (truth-best)")
+        ax4.set_xlabel("Pixel #")
+
+
+        # Create individual colorbars
+        cbar1 = fig.colorbar(im1, ax=ax1, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar2 = fig.colorbar(im2, ax=ax2, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar3 = fig.colorbar(im3, ax=ax3, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar4 = fig.colorbar(im4, ax=ax4, orientation='vertical', fraction=0.046, pad=0.04)
+
+        fig.tight_layout()
+
+        ## getting plot title
+        if self.config_params.noise_off:
+            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.config_params.z}_no_noise_.png", dpi=300)
+        else:
+            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.config_params.z}_w_noise.png", dpi=300)
+        print("Saving three panel plot...")
+
+        plt.close()
+
+
 
     def check_field(self, field, title, normalize=False, save=True, show=False, iteration_number=-1):
         # plotting
@@ -487,7 +560,26 @@ class InferDens(SwitchMinimizer):
             axes.plot(field)
         elif field.ndim == 2 and ("residual" in title or "brightness" in title):
             im = axes.imshow(field)
-            fig.colorbar(im, ax=axes)
+            cbar = fig.colorbar(im, ax=axes)
+            if "brightness" in title:
+                fig.suptitle("Mock 21cm Brightness Temperature Field")
+                axes.set_xlabel("Pixel #")
+                cbar.set_label(r"$T_{b}~\rm [mk]$")
+                # Set the background color for the axes and the figure
+                axes.set_facecolor('black')
+                fig.patch.set_facecolor('black')
+
+                # Set the color of the axis labels and ticks
+                axes.xaxis.label.set_color('white')
+                axes.yaxis.label.set_color('white')
+                axes.tick_params(axis='x', colors='white')
+                axes.tick_params(axis='y', colors='white')
+
+                # Set the color of the colorbar labels and ticks
+                cbar.ax.yaxis.label.set_color('white')
+                cbar.ax.tick_params(axis='y', colors='white')
+            if "residual" in title:
+                fig.suptitle("residual")
         else:
             # density field
             im = axes.imshow(field, norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1))
@@ -506,21 +598,41 @@ class InferDens(SwitchMinimizer):
     def make_1_1_plots(self):
         # ionized_indices = self.data == 0
         plt.close()
-        plt.scatter(self.truth_field.flatten(), self.best_field, label="Ionization Fraction = {}".format(np.round(self.perc_ionized,2)), alpha=0.1, s=10)
-        plt.plot(self.truth_field.flatten(), self.truth_field.flatten(), label="truth", color="black")
+        # plt.scatter(self.truth_field.flatten(), self.best_field.format(np.round(self.perc_ionized,4)), alpha=0.1, s=10)
+
+        # batt_model_instance = Dens2bBatt(self.truth_field, delta_pos=1, set_z=self.config_params.z, flow=True, tanh_slope=self.config_params.tanh_slope)
+        #
+        # x_HII = 1- batt_model_instance.X_HI
+        plt.scatter(self.truth_field.flatten(), self.best_field.flatten(), c=self.data, s=10)
+        cbar = plt.colorbar()
+        cbar.set_label(r"$T_{b}~\rm [mk]$")
+
+        plt.plot(self.truth_field.flatten(), self.truth_field.flatten(), label="Truth Field", color="black")
         plt.xlabel("Truth")
         plt.ylabel("Best Field")
 
         plt.legend()
         plt.savefig(f"{self.plot_direc}/plots/reconstructed_vs_truth.png")
 
+        # plt.close()
+        # plt.scatter(self.truth_field.flatten()[self.ionized_indices_mask], self.best_field[self.ionized_indices], label="Ionization Fraction = {}".format(np.round(self.perc_ionized,4)), s=10)
+        # plt.plot(self.truth_field.flatten()[self.ionized_indices], self.truth_field.flatten()[self.ionized_indices], label="truth", color="black")
+        # plt.legend()
+        # plt.xlabel("Truth")
+        # plt.ylabel("Best Field")
+        # plt.savefig(f"{self.plot_direc}/plots/just_ionized_reconstructed_vs_truth.png")
+
+
+    def make_ionisation_level_residual_plot(self):
         plt.close()
-        plt.scatter(self.truth_field.flatten()[self.ionized_indices_mask], self.best_field[self.ionized_indices], label="Ionization Fraction = {}".format(np.round(self.perc_ionized,2)), s=10)
-        plt.plot(self.truth_field.flatten()[self.ionized_indices], self.truth_field.flatten()[self.ionized_indices], label="truth", color="black")
-        plt.legend()
-        plt.xlabel("Truth")
-        plt.ylabel("Best Field")
-        plt.savefig(f"{self.plot_direc}/plots/just_ionized_reconstructed_vs_truth.png")
+        residual = self.truth_field.flatten() - self.best_field.flatten()
+        batt_model_instance = Dens2bBatt(self.truth_field, delta_pos=1, set_z=self.config_params.z, flow=True, tanh_slope=self.config_params.tanh_slope)
+
+        x_HII = 1- batt_model_instance.X_HI
+        plt.scatter(x_HII, residual)
+        plt.ylabel("residual")
+        plt.xlabel("X_HII")
+        plt.savefig(f"{self.plot_direc}/plots/residual_adelie.png")
 
 
 class ConfigParam:
@@ -529,7 +641,7 @@ class ConfigParam:
                  save_posterior_values=False, run_optimizer=False, mse_plot_on=False,
                  weighted_prior=None, new_prior=False, old_prior=False, verbose=False,
                  debug=False, use_truth_mm=False, save_prior_likelihood_arr=False, seed=1010,
-                 create_instance=False):
+                 create_instance=False, tanh_slope=2):
         """
         :param z - the redshift you would like to create your density field at
         :param data (Default: None) - data that you're fitting your field to and will be used in your chi-squared.
@@ -573,20 +685,26 @@ class ConfigParam:
         self.save_prior_likelihood_arr = save_prior_likelihood_arr
         self.seed = seed
         self.create_instance = create_instance
+        self.tanh_slope = tanh_slope
         assert(self.new_prior != self.old_prior)
 
 
 if __name__ == "__main__":
     print("starting")
     run_optimizer = True
-    params = ConfigParam(z=9, truth_field=None,  brightness_temperature_field=None, num_bins=60,
-                         nothing_off=True, plot_direc="", side_length=256, physical_side_length=128,
-                         dimensions=2, iter_num_max=1, rest_num_max=3, noise_off=False,
-                         save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                         weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                         debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1010,
-                         create_instance=False)
-    samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
-    # samp.plot_panel(normalize=False, log=True)
-    samp.plot_3_panel()
-    samp.plot_pspecs()
+    slopes = [2]
+    for slope in slopes:
+        for z in [6.5, 7, 8]:
+            params = ConfigParam(z=z, truth_field=None,  brightness_temperature_field=None, num_bins=60,
+                                 nothing_off=False, plot_direc="", side_length=128, physical_side_length=64,
+                                 dimensions=2, iter_num_max=1, rest_num_max=3, noise_off=True,
+                                 save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
+                                 weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
+                                 debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
+                                 create_instance=False, tanh_slope=slope)
+            samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
+            # samp.plot_panel(normalize=False, log=True)
+            samp.make_ionisation_level_residual_plot()
+            samp.plot_3_panel()
+            samp.plot_mask()
+            samp.plot_pspecs()
