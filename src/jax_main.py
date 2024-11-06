@@ -7,28 +7,28 @@ independent_only_jax function written by Adrian Liu and Adélie Gorce
 """
 
 # import jax related packages
+from ska_effects import SKAEffects
+import os
 import jax
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
-from jax.config import config
-from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
+from jax import config
+# from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
 from jax.scipy.optimize import \
     minimize as minimize_jax  # this is the bread and butter algorithm of this work, minimization using Jax optimized gradients
 # from jax.example_libraries import optimizers as jaxopt
 import jaxopt
 import theory_matter_ps
 from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal, after_spherical_p_spec_normal
-
-config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
-config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
-config.update("jax_debug_nans", True)
-
-
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
 from jax_battaglia_full import Dens2bBatt
 import matplotlib
 from matplotlib.colors import SymLogNorm
+
+config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
+config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
+config.update("jax_debug_nans", True)
 
 # nice publication fonts for plots are implemented when these lines are uncommented
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
@@ -43,6 +43,7 @@ matplotlib.rcParams.update({'font.size': 12})
 ### quick test below for install working of tanh gradient
 # grad_tanh = grad(jnp.tanh)
 # print(grad_tanh(110.))
+
 
 class SwitchMinimizer:
     def __init__(self, config_params, s_field):
@@ -138,9 +139,9 @@ class SwitchMinimizer:
             plt.close()
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
-
-
-
+            if self.config_params.ska_effects:
+                self.ska = SKAEffects(self.data, True, self.config_params.z, self.resolution)
+                self.data = self.ska.brightness_temp
         else:  # data included in initialization of class
             # print("Using previously generated data and truth field.")
             assert (jnp.shape(self.config_params.truth_field)[0] != 0)
@@ -162,16 +163,19 @@ class SwitchMinimizer:
         # self.truth_field = self.truth_field.at[self.ionized_indices].set(0)
 
         # generate diagonal matrices for chi-squared and adding noise if selected #####################################
-        self.rms = 0.1
         if not self.config_params.noise_off:
             print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
             self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
         # self.rms_Tb = jnp.std(self.data)
-        self.N_diag = self.rms ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim))
+        if self.config_params.ska_effects:
+            self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+        else:
+            self.rms_Tb = jnp.std(self.data)
+            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
 
-        print("N_diagonal")
-        id_print(self.N_diag)
+        # print("N_diagonal")
+        # id_print(self.N_diag)
         ###############################################################################################################
 
         # Generate a starting point field that is just 0.2 * rms of the data if it's not already specified
@@ -263,14 +267,14 @@ class SwitchMinimizer:
         opt_result = jaxopt.LBFGS(fun=self.chi_sq_jax, tol=1e-12, maxiter=1000, maxls=1000,
                                   stop_if_linesearch_fails=True)
 
-
         params, state = opt_result.run(self.s_field)
-        # print('state options')
-        # print(state)
+        # jax.debug.print('failed linesearch? {}', state.failed_linesearch)
+        # print("How many iterations did it take?")
+        # print(self.iter_num)
         self.final_func_val = state.value
 
-        print("How many iterations did it take?")
-        print(self.iter_num)
+        self.iter_failed_line_search_arr.append([state.failed_linesearch, self.iter_num])
+
 
         plt.close()
         plt.plot(self.likelihoods, ls=None, label="likelihoods")
@@ -357,15 +361,15 @@ class SwitchMinimizer:
         self.final_likelihood_prior = prior + likelihood
 
         if self.config_params.verbose:
-
-            print("self.likelihood_off", self.likelihood_off)
-            print("self.prior_off", self.prior_off)
-            print("prior: ")
-            id_print(prior)
-            print("likelihood: ")
-            id_print(likelihood)
-            print("current final posterior")
-            id_print(self.final_likelihood_prior)
+            print("need to update verbose")
+            # print("self.likelihood_off", self.likelihood_off)
+            # print("self.prior_off", self.prior_off)
+            # print("prior: ")
+            # id_print(prior)
+            # print("likelihood: ")
+            # id_print(likelihood)
+            # print("current final posterior")
+            # id_print(self.final_likelihood_prior)
         self.iter_num += 1
 
         return self.final_likelihood_prior
@@ -415,7 +419,7 @@ class SwitchMinimizer:
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
-        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params)
+        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution, apply_ska=self.config_params.ska_effects)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
 
@@ -425,9 +429,9 @@ class SwitchMinimizer:
             plt.title("X_HI")
             plt.colorbar()
             plt.savefig(f"{self.config_params.plot_direc}/plots/{self.config_params.iter_num}_X_HI.png")
-        if self.config_params.verbose:
-            print("The number of neutral pixels is: ")
-            id_print(self.neutral_count)
+        # if self.config_params.verbose:
+        #     print("The number of neutral pixels is: ")
+            # id_print(self.neutral_count)
 
         ###############################################################################################################
         return batt_model_instance.temp_brightness

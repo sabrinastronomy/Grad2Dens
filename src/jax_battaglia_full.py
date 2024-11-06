@@ -1,3 +1,4 @@
+from ska_effects import SKAEffects
 import jax.random
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
@@ -17,13 +18,15 @@ class Dens2bBatt:
     """
     This class follows the Battaglia et al (2013) model to go from a density field to a temperature brightness field.
     """
-    def __init__(self, density, delta_pos, set_z, flow=True, debug=False , free_params={}): # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
+    def __init__(self, density, delta_pos, set_z, flow=True, debug=False, free_params={}, apply_ska=True, resolution=None): # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
         self.debug = debug
         self.b_0 = free_params['b_0']
         self.alpha = free_params['alpha']
         self.k_0 = free_params['k_0']
         self.tanh_slope = free_params['tanh_slope']
         self.avg_z = free_params['avg_z']
+        self.apply_ska = apply_ska
+        self.resolution = resolution
         if density.ndim == 1:
             self.one_d = True
             self.two_d = False
@@ -169,3 +172,6 @@ class Dens2bBatt:
         self.get_z_re()
         self.get_x_hi()
         self.get_temp_brightness()
+        if self.apply_ska:
+            self.ska = SKAEffects(self.temp_brightness, add_all=True, redshift=self.set_z, resolution=self.resolution)
+            self.temp_brightness = self.ska.brightness_temp

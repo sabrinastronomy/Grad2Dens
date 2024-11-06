@@ -3,7 +3,7 @@ Infrastructure to generate MAPs of the matter density field
 Created November, 2022
 Written by Sabrina Berger
 """
-
+import time
 from jax_main import SwitchMinimizer
 import matplotlib
 import numpy as np
@@ -14,7 +14,35 @@ from matplotlib.ticker import MaxNLocator
 from jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from theory_matter_ps import circular_spec_normal, after_circular_spec_normal, spherical_p_spec_normal
-from jax.experimental.host_callback import id_print  # this is a way to print in Jax when things are precompiled
+import argparse
+
+# Set up the argument parser
+parser = argparse.ArgumentParser(description="Run simulation with or without SKA effects")
+
+# Add an argument for ska_effects
+parser.add_argument(
+    '--ska_effects',
+    action='store_true',
+    help="Enable SKA effects if this flag is present"
+)
+
+# Parse the arguments
+args = parser.parse_args()
+
+# Use the argument
+ska_effects = args.ska_effects
+
+# Print the result to verify
+print(f'SKA Effects Enabled: {ska_effects}')
+
+k_0_fiducial = 0.185
+alpha_fiducial = 0.564
+b_0_fiducial = 0.593
+midpoint_z_fiducial = 7
+tanh_fiducial = 1
+
+fiducial_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tanh_slope": tanh_fiducial,
+                   "avg_z": midpoint_z_fiducial, "redshift_run": 6.5}  # b_0=0.5, alpha=0.2, k_0=0.1)
 
 ### defaults for paper plots
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
@@ -40,7 +68,7 @@ class InferDens(SwitchMinimizer):
         self.hessian_vals = jnp.empty(self.config_params.iter_num_max)
 
         self.labels = []
-
+        self.iter_failed_line_search_arr = []
         if config_params.plot_direc == "":
             self.perc_ionized = round(len(self.ionized_indices) / self.config_params.side_length**self.config_params.dim, 1)
             str_free_params = "_".join([f"{key}-{value}" for key, value in self.config_params.free_params.items()])
@@ -52,7 +80,9 @@ class InferDens(SwitchMinimizer):
 
 
             if self.truth_field.any() != None:
-                new_direc = f"free_params_{str_free_params}_dimensions_{self.config_params.dim}_z_{self.config_params.z}_diff_start_" + new_direc
+                new_direc = f"diff_start_" + new_direc
+            if self.config_params.ska_effects:
+                new_direc = f"ska_effects_on_" + new_direc
             try:
                 os.mkdir(new_direc)
                 os.mkdir(new_direc + "/plots")
@@ -71,8 +101,12 @@ class InferDens(SwitchMinimizer):
             self.make_1_1_plots()
 
     def check_threshold(self):
-        batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params)
+        start_time = time.time()
+        batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution)
         temp_model_brightness = batt_model_instance.temp_brightness
+        print("battaglia run took")
+        print(time.time() - start_time)
+
         root_mse_curr = self.root_mse(self.data, temp_model_brightness)
         return root_mse_curr
 
@@ -148,18 +182,10 @@ class InferDens(SwitchMinimizer):
                 print("Something is wrong as neither the likelihood or prior is on.")
                 exit()
 
-            batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params)
-            temp_model_brightness = batt_model_instance.temp_brightness
-
-            self.check_field(temp_model_brightness, "brightness temperature", show=True, save=True,
-                             iteration_number=iter_num_big)
-            # self.check_field(self.best_field_reshaped-self.truth_field, "residuals", show=True, save=True,
-            #                      iteration_number=iter_num_big)
-
             np.save(self.plot_direc + f"/npy/best_field_{self.config_params.z}_{iter_num_big}.npy", self.best_field_reshaped)
             self.labels.append(self.plot_title) # saving configuration of each iteration in list
             np.save(self.plot_direc + f"/npy/labels.npy", self.labels)
-
+            np.save(self.plot_direc + f"/npy/iter_failed_line_search_arr.npy", self.iter_failed_line_search_arr)
             print("iter num big")
             print(iter_num_big)
             print("likelihood off")
@@ -198,9 +224,29 @@ class InferDens(SwitchMinimizer):
             np.save(self.plot_direc + f"/npy/optimizer_output_vals_{self.config_params.z}.npy", self.final_function_value_output)
             np.save(self.plot_direc + f"/npy/hessian_vals_{self.config_params.z}.npy", self.hessian_vals)
             np.save(self.plot_direc + f"/npy/mse_vals_{self.config_params.z}.npy", self.mse_vals)
-        self.plot_all_optimizer_vals()
+        # self.plot_all_optimizer_vals()
         np.save(self.plot_direc + f"/npy/best_field_{self.config_params.z}_FINAL.npy",
                 self.best_field_reshaped)
+
+        # Flatten fields
+        flat_field1 = self.truth_field.flatten()
+        flat_field2 = self.best_field.flatten()
+
+        # Compute correlation coefficient
+        correlation_matrix = np.corrcoef(flat_field1, flat_field2)
+        correlation_coefficient = np.round(correlation_matrix[0, 1], 2)
+
+        plt.close()
+        plt.title(f"PDF ofDensity Fields, r={correlation_coefficient}")
+        plt.hist(self.truth_field.flatten(), density=True, bins=100, label="Truth", alpha=0.4)
+        plt.hist(self.best_field.flatten(), density=True, bins=100, label="Best", alpha=0.4)
+        plt.legend()
+        plt.savefig(self.plot_direc + f"/density_hist.png")
+        plt.close()
+        plt.hist(self.data.flatten(), density=True, bins=100, alpha=0.4)
+        plt.title(f"PDF of Data, r={correlation_coefficient}")
+        plt.savefig(self.plot_direc + f"/data_hist.png")
+        plt.close()
 
     def plot_mask(self):
         self.masked_field = np.copy(self.best_field)
@@ -253,6 +299,7 @@ class InferDens(SwitchMinimizer):
         axes_pspec.loglog(kvals, pspec_truth, label=f"Truth Field", alpha=0.5, color="blue")
         # for i, k in enumerate([0, 1, 2]):
         #     label = labels[k].replace("_", " ")
+
         #     if self.config_params.dim == 2:
         #         counts, pspec_normal, kvals = circular_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.area)
         #         counts, pspec_pre, kvals = after_circular_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.area)
@@ -379,7 +426,7 @@ class InferDens(SwitchMinimizer):
                     self._add_text(residuals_axes[i][j], k, "(Current-Truth) Iteration", self.plot_title)
 
                     # Data panel for current iteration
-                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params)
+                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution)
                     data = batt_model_instance.temp_brightness
                     im = data_axes[i][j].imshow(
                         data,
@@ -661,7 +708,7 @@ class InferDens(SwitchMinimizer):
     def make_ionisation_level_residual_plot(self):
         plt.close()
         residual = self.truth_field.flatten() - self.best_field.flatten()
-        batt_model_instance = Dens2bBatt(self.truth_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params)
+        batt_model_instance = Dens2bBatt(self.truth_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution)
 
         x_HII = 1- batt_model_instance.X_HI
         plt.scatter(x_HII, residual)
@@ -671,7 +718,7 @@ class InferDens(SwitchMinimizer):
 
 
 class ConfigParam:
-    def __init__(self, free_params, z, truth_field, brightness_temperature_field, num_bins, nothing_off, plot_direc, side_length, physical_side_length,
+    def __init__(self, ska_effects, free_params, z, truth_field, brightness_temperature_field, num_bins, nothing_off, plot_direc, side_length, physical_side_length,
                  dimensions=2, iter_num_max=10, rest_num_max=3, noise_off=False,
                  save_posterior_values=False, run_optimizer=False, mse_plot_on=False,
                  weighted_prior=None, new_prior=False, old_prior=False, verbose=False,
@@ -697,6 +744,7 @@ class ConfigParam:
         :param plot_direc (Default: 2D_plots) - where to save plots
         :param autorun (Default: True) - run an immediate gradient descent
         """
+        self.ska_effects = ska_effects
         self.free_params = free_params
         self.z = z
         self.truth_field = truth_field
@@ -724,103 +772,74 @@ class ConfigParam:
         self.create_instance = create_instance
         assert(self.new_prior != self.old_prior)
 
+def grid_test(free_param_name, free_param_arr, static_redshift=True, ska_effects=False, fiducial_params=fiducial_params):
+    import GPUtil
+    import gc
+    # try to stop this from crashing
+    for free_param in free_param_arr:
+        gpu = GPUtil.getGPUs()[0]
+        print(
+            f"GPU ID: {gpu.id}, Memory Free: {gpu.memoryFree}MB, Memory Used: {gpu.memoryUsed}MB, Memory Total: {gpu.memoryTotal}MB")
+        if free_param_arr == [None]:  # no free parameters
+            z = fiducial_params["redshift_run"]
+        else:
+            free_param = np.round(free_param, decimals=4)
+            if static_redshift:
+
+                fiducial_params[free_param_name] = free_param # update fiducial param list with varying parameter
+                z = fiducial_params["redshift_run"]
+            else: # varying redshift
+                z = free_param
+        params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=None,  brightness_temperature_field=None, num_bins=12,
+                             nothing_off=True, plot_direc="", side_length=64, physical_side_length=32,
+                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
+                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
+                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
+                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
+                             create_instance=False)
+        samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
+        samp.make_ionisation_level_residual_plot()
+        samp.plot_3_panel()
+        samp.plot_mask()
+        samp.plot_pspecs()
+        gc.collect()
 
 if __name__ == "__main__":
-    print("starting")
     run_optimizer = True
-    alphas = np.linspace(0.1, 2, 5)
-    b_0s = np.linspace(0.1, 2, 5)
-    k_0s = np.linspace(0.1, 2, 5)
-
-    for z in [6.5, 7, 7.5]:
-        free_params = {"b_0": 0.5, "alpha": 0.2, "k_0": 0.01, "tanh_slope": 1,
-                       "avg_z": 7}  # b_0=0.5, alpha=0.2, k_0=0.1)
-
-        params = ConfigParam(free_params=free_params, z=z, truth_field=None,  brightness_temperature_field=None, num_bins=32,
-                             nothing_off=False, plot_direc="", side_length=64, physical_side_length=32,
-                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
-                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                             create_instance=False)
-        samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
-        # samp.plot_panel(normalize=False, log=True)
-        samp.make_ionisation_level_residual_plot()
-        samp.plot_3_panel()
-        samp.plot_mask()
-        samp.plot_pspecs()
-    z = 6.5
-
-    for alpha in alphas:
-        free_params = {"b_0": 0.5, "alpha": alpha, "k_0": 0.01, "tanh_slope": 1,
-                       "avg_z": 7}  # b_0=0.5, alpha=0.2, k_0=0.1)
-
-        params = ConfigParam(free_params=free_params, z=z, truth_field=None,  brightness_temperature_field=None, num_bins=32,
-                             nothing_off=False, plot_direc="", side_length=64, physical_side_length=32,
-                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
-                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                             create_instance=False)
-        samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
-        # samp.plot_panel(normalize=False, log=True)
-        samp.make_ionisation_level_residual_plot()
-        samp.plot_3_panel()
-        samp.plot_mask()
-        samp.plot_pspecs()
 
 
-    for b_0 in b_0s:
-        free_params = {"b_0": b_0, "alpha": 0.2, "k_0": 0.01, "tanh_slope": 1,
-                       "avg_z": 7}  # b_0=0.5, alpha=0.2, k_0=0.1)
+    grid_test("none", [None], static_redshift=True, ska_effects=ska_effects,
+                  fiducial_params=fiducial_params)
 
-        params = ConfigParam(free_params=free_params, z=z, truth_field=None,  brightness_temperature_field=None, num_bins=32,
-                             nothing_off=False, plot_direc="", side_length=64, physical_side_length=32,
-                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
-                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                             create_instance=False)
-        samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
-        # samp.plot_panel(normalize=False, log=True)
-        samp.make_ionisation_level_residual_plot()
-        samp.plot_3_panel()
-        samp.plot_mask()
-        samp.plot_pspecs()
 
-    for k_0 in k_0s:
-        free_params = {"b_0": 0.5, "alpha": 0.2, "k_0": k_0, "tanh_slope": 1,
-                       "avg_z": 7}  # b_0=0.5, alpha=0.2, k_0=0.1)
+    exit()
+    # Define parameter ranges
+    alphas = np.linspace(0.1, 2, 20)
+    b_0s = np.logspace(-2, 2, 20)
+    k_0s = np.logspace(-2, 2, 20)
+    avg_z = np.linspace(5, 8, 20)
 
-        params = ConfigParam(free_params=free_params, z=z, truth_field=None,  brightness_temperature_field=None, num_bins=32,
-                             nothing_off=False, plot_direc="", side_length=64, physical_side_length=32,
-                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
-                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                             create_instance=False)
-        samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
-        # samp.plot_panel(normalize=False, log=True)
-        samp.make_ionisation_level_residual_plot()
-        samp.plot_3_panel()
-        samp.plot_mask()
-        samp.plot_pspecs()
+    # Create a mesh grid
+    alpha_grid, b_0_grid, k_0_grid, avg_z_grid = np.meshgrid(alphas, b_0s, k_0s, avg_z, indexing='ij')
 
-    for avg_z in [6,7,8]:
-        free_params = {"b_0": 0.5, "alpha": 0.2, "k_0": 0.1, "tanh_slope": 1,
-                       "avg_z": avg_z}  # b_0=0.5, alpha=0.2, k_0=0.1)
+    # Reshape to create a list of all combinations
+    alpha_values = alpha_grid.flatten()
+    b_0_values = b_0_grid.flatten()
+    k_0_values = k_0_grid.flatten()
+    avg_z_values = avg_z_grid.flatten()
 
-        params = ConfigParam(free_params=free_params, z=z, truth_field=None, brightness_temperature_field=None,
-                             num_bins=32,
-                             nothing_off=False, plot_direc="", side_length=64, physical_side_length=32,
-                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
-                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                             create_instance=False)
-        samp = InferDens(params, s_field=None)  # setting s-field to none for first iteration
-        # samp.plot_panel(normalize=False, log=True)
-        samp.make_ionisation_level_residual_plot()
-        samp.plot_3_panel()
-        samp.plot_mask()
-        samp.plot_pspecs()
+    # Number of parameter combinations
+    num_combinations = alpha_values.size
+    # Iterate over each combination of parameters
+    for i in range(num_combinations):
+        print(f"Completed {i} out of {num_combinations}!")
+        alpha = alpha_values[i]
+        b_0 = b_0_values[i]
+        k_0 = k_0_values[i]
+        avg_z = avg_z_values[i]
+
+        # Call your `grid_test` function with these parameters
+        grid_test("alpha", [alpha], static_redshift=True, ska_effects=ska_effects)
+        grid_test("b_0", [b_0], static_redshift=True, ska_effects=ska_effects)
+        grid_test("k_0", [k_0], static_redshift=True, ska_effects=ska_effects)
+        grid_test("avg_z", [avg_z], static_redshift=True, ska_effects=ska_effects)

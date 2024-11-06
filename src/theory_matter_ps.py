@@ -4,7 +4,12 @@ from camb import model
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import matplotlib
-from jax_battaglia_full import Dens2bBatt
+# from jax_battaglia_full import Dens2bBatt
+
+## defaults for paper plots
+matplotlib.rcParams['mathtext.fontset'] = 'stix'
+matplotlib.rcParams['font.family'] = 'STIXGeneral'
+matplotlib.rcParams.update({'font.size': 12})
 
 # SETTINGS (see below for usage)
 nonlinear = False
@@ -47,7 +52,7 @@ def circular_spec_normal(field, nbins, resolution, area, verbose=False):
     square before averaging (histogramming)
     """
     curr_side_length = np.shape(field)[0]
-    fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
+    fft_data = np.fft.fftshift(np.fft.fftn(field))
     # fft_data_squared = np.real(fft_data * np.conj(fft_data)) # units pixels^4
     fft_data_squared = np.abs(fft_data**2)
     k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
@@ -85,7 +90,7 @@ def after_circular_spec_normal(field, nbins, resolution, area, verbose=False):
     square AFTER averaging (histogramming)
     """
     curr_side_length = np.shape(field)[0]
-    fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
+    fft_data = np.fft.fftshift(np.fft.fftn(field))
     # fft_data_squared = np.real(fft_data * np.conj(fft_data)) # units pixels^4
     fft_data_squared = fft_data
     k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
@@ -113,7 +118,7 @@ def spherical_p_spec_normal(field, nbins, resolution, volume):
     square before averaging (histogramming)
     """
     curr_side_length = np.shape(field)[0]
-    fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
+    fft_data = np.fft.fftshift(np.fft.fftn(field))
     fft_data_squared = np.abs(fft_data**2)
     k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
     k_arr *= resolution
@@ -129,7 +134,6 @@ def spherical_p_spec_normal(field, nbins, resolution, volume):
     # print(f"resolution, {resolution} pixels/mpc") # pixels/mpc
     pspec /= volume
     pspec *= (1/resolution)**3 # converting form pixels^3 to Mpc^3
-    # print("PLEASE CHECK THIS")
     return counts, pspec, bin_means
 
 def after_spherical_p_spec_normal(field, nbins, resolution, volume):
@@ -137,7 +141,7 @@ def after_spherical_p_spec_normal(field, nbins, resolution, volume):
     square after averaging (histogramming)
     """
     curr_side_length = np.shape(field)[0]
-    fft_data = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
+    fft_data = np.fft.fftshift(np.fft.fftn((field)))
     fft_data_squared = np.abs(fft_data)
     k_arr = np.fft.fftshift(np.fft.fftfreq(curr_side_length)) * 2 * np.pi
     k_arr *= resolution
@@ -205,220 +209,207 @@ def convert_pspec_2_2D(power_spectrum, num_k_modes, resolution):
 
 
 def calc_2D_pspec(field, area, resolution, pixel_side_length):
-    p_spec_2d_pbox_full = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(field)))
+    p_spec_2d_pbox_full = np.fft.fftshift(np.fft.fftn((field)))
     p_spec_2d_pbox_full = np.abs(p_spec_2d_pbox_full**2)
     p_spec_2d_pbox_full *= area
     return p_spec_2d_pbox_full
 
 
 if __name__ == "__main__":
-    pixel_side_length = 256
-    physical_side_length = 128
-    dim = 2
-    z = 7
-    if dim == 3:
-        no_shift_k = np.fft.fftfreq(pixel_side_length)
-        k_arr = np.fft.fftshift(np.fft.fftfreq(pixel_side_length)) * 2 * np.pi
-        k1, k2, k3 = np.meshgrid(k_arr, k_arr, k_arr)
-        k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2 + k3**2)
+    import matplotlib.pyplot as plt
+    import GPUtil
+    from matplotlib import cm
+    pixel_side_length = 128
+    physical_side_length = 64
+    dim = 3
+    no_shift_k = np.fft.fftfreq(pixel_side_length)
+    k_arr = np.fft.fftshift(np.fft.fftfreq(pixel_side_length)) * 2 * np.pi
+    k1, k2, k3 = np.meshgrid(k_arr, k_arr, k_arr)
+    k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2 + k3 ** 2)
 
-        kmax = 2 * np.pi / physical_side_length * (pixel_side_length / 2)
-        print("kmax for theory")
-        print(kmax)
-        pspec_k_func = get_truth_matter_pspec(kmax, physical_side_length, z, dim)
+    kmax = 2 * np.pi / physical_side_length * (pixel_side_length / 2)
+    print("kmax")
+    print(kmax)
 
+    mask = k_mag_full != 0
+    k_mag_full = k_mag_full[mask] # masking 0
+    print("k_mag_full min")
+    print(np.min(k_mag_full))
 
+    print("k_mag_full max")
+    print(np.max(k_mag_full))
+    gpu = GPUtil.getGPUs()[0]
+    print(gpu)
+    redshifts = [0, 6, 8, 10]
+    colors = cm.viridis(np.linspace(0, 1, len(redshifts)))
+    for i, z in enumerate(redshifts): # making Figure CAMB_3dpspec
+        if dim == 3:
+            p_spec_k_func = get_truth_matter_pspec(kmax, physical_side_length, z, dim)
+            k_mag_full = k_mag_full.flatten()
+            plt.semilogy(k_mag_full, p_spec_k_func(k_mag_full), label=f'z = {z}', color=colors[i])
+            gpu = GPUtil.getGPUs()[0]
+            print(
+                f"GPU ID: {gpu.id}, Memory Free: {gpu.memoryFree}MB, Memory Used: {gpu.memoryUsed}MB, Memory Total: {gpu.memoryTotal}MB")
 
-        pb = pbox.PowerBox(
-            N=pixel_side_length,
-            dim=dim,  # dimension of box
-            pk=pspec_k_func,  # The power-spectrum
-            boxlength=physical_side_length,  # Size of the box (sets the units of k in pk)
-            seed=1010,  # Use the same seed as our powerbox
-        )
+    plt.xlabel(r"$\mathbf{k}~[\rm Mpc^{-1}]$")
+    plt.ylabel(r"$\rm P_{mm, truth}~[Mpc^3]$")
+    plt.legend()
+    plt.savefig("../paper_plots/CAMB_3dpspec.png", dpi=300)
 
-        resolution = pixel_side_length / physical_side_length
-        volume_pixels = pixel_side_length ** 3
-        p_k_field, bins_field = pbox.get_power(pb.delta_x(), boxlength=pb.boxlength)
-
-        print("bins field")
-        print(np.max(bins_field))
-
-        p_spec_cmb = pspec_k_func(bins_field)
-        counts, pspec_own, kvals_own = spherical_p_spec_normal(pb.delta_x(), 64, resolution, volume_pixels)
-
-        plt.title(f"physics side length = {physical_side_length}, number of pixels = {pixel_side_length}")
-        plt.loglog(bins_field, p_k_field, label=rf'powerbox (large box)', c="m")
-        plt.loglog(bins_field, p_spec_cmb.squeeze(), label=rf'truth (large box)', ls="--", c="m")
-        plt.loglog(kvals_own, pspec_own, label=rf'my pspec (large box)')
-        plt.legend()
-        plt.savefig("pspec_3D_comp.png")
-        plt.close()
-
-        plt.close()
-        plt.imshow(pb.delta_x()[0, :, :])
-        plt.title("truth field")
-        plt.colorbar()
-        plt.savefig("truth_field.png")
-        plt.close()
-
-        plt.plot(kvals_own, counts)
-        plt.savefig("counts.png")
-
-    if dim == 2:
-        # no_shift_k = np.fft.fftfreq(pixel_side_length)
-        # k_arr = np.fft.fftshift(np.fft.fftfreq(pixel_side_length)) * 2 * np.pi
-        # k1, k2 = np.meshgrid(k_arr, k_arr)
-        # k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
-
-        kmax = 30
-        pspec_k_func = get_truth_matter_pspec(kmax, physical_side_length, z, dim)
-
-        ## benji
-        pb = pbox.PowerBox(
-            N=512,
-            dim=dim,  # dimension of box
-            pk=pspec_k_func,  # The power-spectrum
-            boxlength=1024,  # Size of the box (sets the units of k in pk)
-            seed=1010,  # Use the same seed as our powerbox
-        )
-        p_k_field, bins_field = pbox.get_power(pb.delta_x(), boxlength=pb.boxlength)
-        plt.loglog(bins_field, p_k_field, label="side length = 1024 Mpc")
-        pb_2 = pbox.PowerBox(
-            N=512,
-            dim=dim,  # dimension of box
-            pk=pspec_k_func,  # The power-spectrum
-            boxlength=256,  # Size of the box (sets the units of k in pk)
-            seed=1010,  # Use the same seed as our powerbox
-        )
-
-        p_k_field, bins_field = pbox.get_power(pb_2.delta_x(), boxlength=pb_2.boxlength)
-        plt.loglog(bins_field, p_k_field, label="side length = 256 Mpc")
-        plt.legend()
-        plt.show()
-        plt.close()
-        plt.imshow(pb.delta_x())
-        plt.title("1024 Mpc")
-        plt.show()
-        plt.close()
-        plt.imshow(pb_2.delta_x())
-        plt.title("256 Mpc")
-        plt.show()
-        plt.close()
-
-
-        pb = pbox.PowerBox(
-            N=pixel_side_length,
-            dim=dim,  # dimension of box
-            pk=pspec_k_func,  # The power-spectrum
-            boxlength=physical_side_length,  # Size of the box (sets the units of k in pk)
-            seed=1010,  # Use the same seed as our powerbox
-        )
-
-        pb_2 = pbox.PowerBox(
-            N=pixel_side_length,
-            dim=dim,  # dimension of box
-            pk=pspec_k_func,  # The power-spectrum
-            boxlength=3432,  # Size of the box (sets the units of k in pk)
-            seed=1010,  # Use the same seed as our powerbox
-        )
-
-        resolution = pixel_side_length / physical_side_length
-        area = pixel_side_length**2
-        p_k_field, bins_field = pbox.get_power(pb.delta_x(), boxlength=pb.boxlength)
-
-
-        p_spec_cmb = pspec_k_func(bins_field)
-        num_bins = len(bins_field)
-
-        counts, pspec_own, kvals_own = circular_spec_normal(pb.delta_x(), num_bins, resolution, area)
-
-        plt.plot(kvals_own,counts)
-        plt.savefig("counts.png")
-        plt.close()
-
-        batt_model_instance = Dens2bBatt(pb.delta_x(), delta_pos=1, set_z=7, flow=True, resolution=resolution)
-
-        plt.title(f"physical side length = {physical_side_length}, number of pixels = {pixel_side_length}")
-        plt.loglog(bins_field, p_k_field, label=rf'powerbox', c="m")
-        plt.loglog(bins_field, p_spec_cmb.squeeze(), label=rf'truth', ls="--", c="m")
-        plt.loglog(kvals_own, pspec_own, label=rf'my pspec')
-        plt.legend()
-        plt.savefig("pspec_debug_plots/pspec_2D_comp.png")
-        plt.close()
-
-        plt.loglog(bins_field, np.abs(pspec_own - p_k_field), label=rf'my pspec - pbox pspec', ls="--", c="m")
-        plt.legend()
-        plt.savefig("pspec_debug_plots/pspec_1D_diff.png")
-        plt.close()
-
-        plt.imshow(pb.delta_x())
-        plt.title("truth field")
-        plt.colorbar()
-        plt.savefig("pspec_debug_plots/truth_field.png")
-        plt.close()
-
-        plt.imshow(batt_model_instance.temp_brightness)
-        plt.title("temp brightness")
-        plt.colorbar()
-        plt.savefig("pspec_debug_plots/data.png")
-        plt.close()
-
-        k_mag_full, p_spec_2d_cmb = convert_pspec_2_2D(pspec_k_func, pixel_side_length, resolution)
-
-        # p_spec_2d_pbox_full = calc_2D_pspec(pb.delta_x(), area, resolution, pixel_side_length)
-        p_spec_2d_pbox_full = pb.power_array() * area
-        x = p_spec_2d_pbox_full-p_spec_2d_cmb
-        print(np.sum(x))
-        print(np.sum((pb_2.power_array() * area) -p_spec_2d_cmb))
-
-        plt.imshow(x, norm=matplotlib.colors.SymLogNorm(linthresh=0.001))
-        plt.title("diff pspec")
-        plt.colorbar()
-        plt.savefig(f"pspec_debug_plots/diff_{z}.png")
-        plt.close()
-
-        plt.imshow(p_spec_2d_pbox_full, norm=matplotlib.colors.LogNorm())
-        plt.title("2d pbox power spec")
-        plt.colorbar()
-        plt.savefig(f"pspec_debug_plots/2d_pspec_pbox_{z}.png")
-        plt.close()
-
-        plt.imshow(p_spec_2d_cmb, norm=matplotlib.colors.LogNorm())
-        plt.title("2d truth power spec")
-        plt.colorbar()
-        plt.savefig(f"pspec_debug_plots/2d_pspec_cmb_{z}.png")
-        plt.close()
-
-
-    # counts, pspec, kvals = p_spec_normal(p_spec_2d_cmb, 250)
-    # counts_func = interpolate.interp1d(kvals, counts, fill_value="extrapolate")
-    # weights = counts_func(k_mag_full)
-    # p_spec_2d_cmb *= (1 / weights ** 2)
-    # weights = k_mag_full
-
-    # plt.imshow(p_spec_2d_pbox_full, norm=matplotlib.colors.LogNorm())
-    # plt.title("2d pbox power spec")
-    # plt.colorbar()
-    # plt.savefig(f"pspec_debug_plots/2d_pspec_pbox_{z}.png")
-    # plt.close()
+    # if dim == 2:
+    #     # no_shift_k = np.fft.fftfreq(pixel_side_length)
+    #     # k_arr = np.fft.fftshift(np.fft.fftfreq(pixel_side_length)) * 2 * np.pi
+    #     # k1, k2 = np.meshgrid(k_arr, k_arr)
+    #     # k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
     #
-    # plt.imshow(p_spec_2d_cmb, norm=matplotlib.colors.LogNorm())
-    # plt.title("2d truth power spec")
-    # plt.colorbar()
-    # plt.savefig(f"pspec_debug_plots/2d_pspec_cmb_{z}.png")
-    # plt.close()
-
-    # x = (p_spec_2d_pbox_full-p_spec_2d_cmb) / p_spec_2d_cmb
-    # x = np.reshape(x, (side_length, side_length))
-    # plt.imshow(x, norm=matplotlib.colors.SymLogNorm(linthresh=0.001))
-    # plt.title("diff pspec")
-    # plt.colorbar()
-    # plt.savefig(f"pspec_debug_plots/diff_{z}.png")
-    # plt.close()
-
-    # plt.imshow(weights, norm=matplotlib.colors.SymLogNorm(linthresh=0.001))
-    # plt.title("weights")
-    # plt.colorbar()
-    # plt.savefig(f"pspec_debug_plots/weights_{z}.png")
-    # plt.close()
+    #     kmax = 30
+    #     pspec_k_func = get_truth_matter_pspec(kmax, physical_side_length, z, dim)
+    #
+    #     ## benji
+    #     pb = pbox.PowerBox(
+    #         N=512,
+    #         dim=dim,  # dimension of box
+    #         pk=pspec_k_func,  # The power-spectrum
+    #         boxlength=1024,  # Size of the box (sets the units of k in pk)
+    #         seed=1010,  # Use the same seed as our powerbox
+    #     )
+    #     p_k_field, bins_field = pbox.get_power(pb.delta_x(), boxlength=pb.boxlength)
+    #     plt.loglog(bins_field, p_k_field, label="side length = 1024 Mpc")
+    #     pb_2 = pbox.PowerBox(
+    #         N=512,
+    #         dim=dim,  # dimension of box
+    #         pk=pspec_k_func,  # The power-spectrum
+    #         boxlength=256,  # Size of the box (sets the units of k in pk)
+    #         seed=1010,  # Use the same seed as our powerbox
+    #     )
+    #
+    #     p_k_field, bins_field = pbox.get_power(pb_2.delta_x(), boxlength=pb_2.boxlength)
+    #     plt.loglog(bins_field, p_k_field, label="side length = 256 Mpc")
+    #     plt.legend()
+    #     plt.show()
+    #     plt.close()
+    #     plt.imshow(pb.delta_x())
+    #     plt.title("1024 Mpc")
+    #     plt.show()
+    #     plt.close()
+    #     plt.imshow(pb_2.delta_x())
+    #     plt.title("256 Mpc")
+    #     plt.show()
+    #     plt.close()
+    #
+    #
+    #     pb = pbox.PowerBox(
+    #         N=pixel_side_length,
+    #         dim=dim,  # dimension of box
+    #         pk=pspec_k_func,  # The power-spectrum
+    #         boxlength=physical_side_length,  # Size of the box (sets the units of k in pk)
+    #         seed=1010,  # Use the same seed as our powerbox
+    #     )
+    #
+    #     pb_2 = pbox.PowerBox(
+    #         N=pixel_side_length,
+    #         dim=dim,  # dimension of box
+    #         pk=pspec_k_func,  # The power-spectrum
+    #         boxlength=3432,  # Size of the box (sets the units of k in pk)
+    #         seed=1010,  # Use the same seed as our powerbox
+    #     )
+    #
+    #     resolution = pixel_side_length / physical_side_length
+    #     area = pixel_side_length**2
+    #     p_k_field, bins_field = pbox.get_power(pb.delta_x(), boxlength=pb.boxlength)
+    #
+    #
+    #     p_spec_cmb = pspec_k_func(bins_field)
+    #     num_bins = len(bins_field)
+    #
+    #     counts, pspec_own, kvals_own = circular_spec_normal(pb.delta_x(), num_bins, resolution, area)
+    #
+    #     plt.plot(kvals_own,counts)
+    #     plt.savefig("counts.png")
+    #     plt.close()
+    #
+    #     batt_model_instance = Dens2bBatt(pb.delta_x(), delta_pos=1, set_z=7, flow=True, resolution=resolution)
+    #
+    #     plt.title(f"physical side length = {physical_side_length}, number of pixels = {pixel_side_length}")
+    #     plt.loglog(bins_field, p_k_field, label=rf'powerbox', c="m")
+    #     plt.loglog(bins_field, p_spec_cmb.squeeze(), label=rf'truth', ls="--", c="m")
+    #     plt.loglog(kvals_own, pspec_own, label=rf'my pspec')
+    #     plt.legend()
+    #     plt.savefig("pspec_debug_plots/pspec_2D_comp.png")
+    #     plt.close()
+    #
+    #     plt.loglog(bins_field, np.abs(pspec_own - p_k_field), label=rf'my pspec - pbox pspec', ls="--", c="m")
+    #     plt.legend()
+    #     plt.savefig("pspec_debug_plots/pspec_1D_diff.png")
+    #     plt.close()
+    #
+    #     plt.imshow(pb.delta_x())
+    #     plt.title("truth field")
+    #     plt.colorbar()
+    #     plt.savefig("pspec_debug_plots/truth_field.png")
+    #     plt.close()
+    #
+    #     plt.imshow(batt_model_instance.temp_brightness)
+    #     plt.title("temp brightness")
+    #     plt.colorbar()
+    #     plt.savefig("pspec_debug_plots/data.png")
+    #     plt.close()
+    #
+    #     k_mag_full, p_spec_2d_cmb = convert_pspec_2_2D(pspec_k_func, pixel_side_length, resolution)
+    #
+    #     # p_spec_2d_pbox_full = calc_2D_pspec(pb.delta_x(), area, resolution, pixel_side_length)
+    #     p_spec_2d_pbox_full = pb.power_array() * area
+    #     x = p_spec_2d_pbox_full-p_spec_2d_cmb
+    #     print(np.sum(x))
+    #     print(np.sum((pb_2.power_array() * area) -p_spec_2d_cmb))
+    #
+    #     plt.imshow(x, norm=matplotlib.colors.SymLogNorm(linthresh=0.001))
+    #     plt.title("diff pspec")
+    #     plt.colorbar()
+    #     plt.savefig(f"pspec_debug_plots/diff_{z}.png")
+    #     plt.close()
+    #
+    #     plt.imshow(p_spec_2d_pbox_full, norm=matplotlib.colors.LogNorm())
+    #     plt.title("2d pbox power spec")
+    #     plt.colorbar()
+    #     plt.savefig(f"pspec_debug_plots/2d_pspec_pbox_{z}.png")
+    #     plt.close()
+    #
+    #     plt.imshow(p_spec_2d_cmb, norm=matplotlib.colors.LogNorm())
+    #     plt.title("2d truth power spec")
+    #     plt.colorbar()
+    #     plt.savefig(f"pspec_debug_plots/2d_pspec_cmb_{z}.png")
+    #     plt.close()
+    #
+    #
+    # # counts, pspec, kvals = p_spec_normal(p_spec_2d_cmb, 250)
+    # # counts_func = interpolate.interp1d(kvals, counts, fill_value="extrapolate")
+    # # weights = counts_func(k_mag_full)
+    # # p_spec_2d_cmb *= (1 / weights ** 2)
+    # # weights = k_mag_full
+    #
+    # # plt.imshow(p_spec_2d_pbox_full, norm=matplotlib.colors.LogNorm())
+    # # plt.title("2d pbox power spec")
+    # # plt.colorbar()
+    # # plt.savefig(f"pspec_debug_plots/2d_pspec_pbox_{z}.png")
+    # # plt.close()
+    # #
+    # # plt.imshow(p_spec_2d_cmb, norm=matplotlib.colors.LogNorm())
+    # # plt.title("2d truth power spec")
+    # # plt.colorbar()
+    # # plt.savefig(f"pspec_debug_plots/2d_pspec_cmb_{z}.png")
+    # # plt.close()
+    #
+    # # x = (p_spec_2d_pbox_full-p_spec_2d_cmb) / p_spec_2d_cmb
+    # # x = np.reshape(x, (side_length, side_length))
+    # # plt.imshow(x, norm=matplotlib.colors.SymLogNorm(linthresh=0.001))
+    # # plt.title("diff pspec")
+    # # plt.colorbar()
+    # # plt.savefig(f"pspec_debug_plots/diff_{z}.png")
+    # # plt.close()
+    #
+    # # plt.imshow(weights, norm=matplotlib.colors.SymLogNorm(linthresh=0.001))
+    # # plt.title("weights")
+    # # plt.colorbar()
+    # # plt.savefig(f"pspec_debug_plots/weights_{z}.png")
+    # # plt.close()
