@@ -426,7 +426,7 @@ class InferDens(SwitchMinimizer):
                     self._add_text(residuals_axes[i][j], k, "(Current-Truth) Iteration", self.plot_title)
 
                     # Data panel for current iteration
-                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution)
+                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution, apply_ska=self.config_params.ska_effects)
                     data = batt_model_instance.temp_brightness
                     im = data_axes[i][j].imshow(
                         data,
@@ -808,11 +808,10 @@ if __name__ == "__main__":
     run_optimizer = True
 
 
-    grid_test("none", [None], static_redshift=True, ska_effects=ska_effects,
-                  fiducial_params=fiducial_params)
+    # grid_test("none", [None], static_redshift=True, ska_effects=ska_effects,
+    #               fiducial_params=fiducial_params)
 
 
-    exit()
     # Define parameter ranges
     alphas = np.linspace(0.1, 2, 20)
     b_0s = np.logspace(-2, 2, 20)
@@ -842,4 +841,4 @@ if __name__ == "__main__":
         grid_test("alpha", [alpha], static_redshift=True, ska_effects=ska_effects)
         grid_test("b_0", [b_0], static_redshift=True, ska_effects=ska_effects)
         grid_test("k_0", [k_0], static_redshift=True, ska_effects=ska_effects)
-        grid_test("avg_z", [avg_z], static_redshift=True, ska_effects=ska_effects)
+        grid_test("avg_z", [avg_z], static_redshift=False, ska_effects=ska_effects)
