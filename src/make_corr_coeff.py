@@ -8,16 +8,19 @@ dim = 3
 seed = 1
 correlation_coeffs = []
 
-alphas = np.linspace(0.1, 2, 20)
-b_0s = np.linspace(0.1, 2, 20)
-k_0s = np.linspace(0.1, 2, 20)
-avg_zs = np.linspace(6, 7, 20)
+# Define parameter ranges
+alphas = np.linspace(0.1, 2, 2)
+b_0s = np.logspace(-2, 2, 2)
+k_0s = np.logspace(-2, 2, 2)
+avg_z = np.linspace(5, 8, 2)
 
 k_0_fiducial = 0.185
 alpha_fiducial = 0.564
 b_0_fiducial = 0.593
 midpoint_z_fiducial = 7
 tanh_fiducial = 1
+
+alpha_grid, b_0_grid, k_0_grid, avg_z_grid = np.meshgrid(alphas, b_0s, k_0s, avg_z, indexing='ij')
 
 free_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tanh_slope": tanh_fiducial,
                    "avg_z": midpoint_z_fiducial, "redshift_run": 6.5}  # b_0=0.5, alpha=0.2, k_0=0.1)

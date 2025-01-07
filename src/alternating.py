@@ -13,8 +13,11 @@ import os
 from matplotlib.ticker import MaxNLocator
 from jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import circular_spec_normal, after_circular_spec_normal, spherical_p_spec_normal
+from theory_matter_ps import spherical_p_spec_normal
 import argparse
+from scipy.ndimage import gaussian_filter
+from matplotlib import colors
+from scipy.stats import kurtosis, skew, kurtosistest, normaltest
 
 # Set up the argument parser
 parser = argparse.ArgumentParser(description="Run simulation with or without SKA effects")
@@ -26,23 +29,20 @@ parser.add_argument(
     help="Enable SKA effects if this flag is present"
 )
 
+parser.add_argument(
+    '--num_combinations',
+    type=int,
+    default=1,
+    help="Number of combinations we stopped at (default is 1)"
+)
+
 # Parse the arguments
 args = parser.parse_args()
 
 # Use the argument
 ska_effects = args.ska_effects
+num_combinations_start = args.num_combinations
 
-# Print the result to verify
-print(f'SKA Effects Enabled: {ska_effects}')
-
-k_0_fiducial = 0.185
-alpha_fiducial = 0.564
-b_0_fiducial = 0.593
-midpoint_z_fiducial = 7
-tanh_fiducial = 1
-
-fiducial_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tanh_slope": tanh_fiducial,
-                   "avg_z": midpoint_z_fiducial, "redshift_run": 6.5}  # b_0=0.5, alpha=0.2, k_0=0.1)
 
 ### defaults for paper plots
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
@@ -79,10 +79,10 @@ class InferDens(SwitchMinimizer):
                 new_direc = f"free_params_{str_free_params}_dimensions_{self.config_params.dim}_z_{self.config_params.z}_perc_ionized_{self.perc_ionized}_seed_{self.config_params.seed}_bins_{self.config_params.num_bins}"
 
 
-            if self.truth_field.any() != None:
-                new_direc = f"diff_start_" + new_direc
-            if self.config_params.ska_effects:
-                new_direc = f"ska_effects_on_" + new_direc
+            if self.truth_field.any() != None and not self.config_params.ska_effects:
+                new_direc = f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/ska_off_full_grid/diff_start_" + new_direc
+            elif self.truth_field.any() != None and self.config_params.ska_effects:
+                new_direc = f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/ska_on_full_grid/ska_on_diff_start_" + new_direc
             try:
                 os.mkdir(new_direc)
                 os.mkdir(new_direc + "/plots")
@@ -102,7 +102,7 @@ class InferDens(SwitchMinimizer):
 
     def check_threshold(self):
         start_time = time.time()
-        batt_model_instance = Dens2bBatt(self.best_field_reshaped, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution)
+        batt_model_instance = Dens2bBatt(self.best_field_reshaped, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params)
         temp_model_brightness = batt_model_instance.temp_brightness
         print("battaglia run took")
         print(time.time() - start_time)
@@ -142,13 +142,14 @@ class InferDens(SwitchMinimizer):
                 else:
                     print("Prior ON")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=False, iter_num_big=iter_num_big)
-                ####
+
                 self.check_field(self.s_field_original, "starting field", show=False, save=True,
                                  iteration_number=-1)
                 self.check_field(self.truth_field, "truth field", show=False, save=True,
                                  iteration_number=-1)
-                self.check_field(self.data, "data (brightness temperature)", show=False, save=True,
+                self.check_field(self.data, "data", show=False, save=True,
                                  iteration_number=-1)
+
 
                 np.save(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy", self.truth_field)
                 np.save(self.plot_direc + f"/npy/data_field_{self.config_params.z}.npy", self.data)
@@ -161,7 +162,8 @@ class InferDens(SwitchMinimizer):
                     if self.likelihood_off:
                         self.mask_ionized = True
                 else:
-                    self.mask_ionized = True
+                    # Never masking when both are on!!
+                    self.mask_ionized = False
 
                 print("Subsequent run")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=True, iter_num_big=iter_num_big)
@@ -237,7 +239,7 @@ class InferDens(SwitchMinimizer):
         correlation_coefficient = np.round(correlation_matrix[0, 1], 2)
 
         plt.close()
-        plt.title(f"PDF ofDensity Fields, r={correlation_coefficient}")
+        plt.title(f"PDF of Density Fields, r={correlation_coefficient}")
         plt.hist(self.truth_field.flatten(), density=True, bins=100, label="Truth", alpha=0.4)
         plt.hist(self.best_field.flatten(), density=True, bins=100, label="Best", alpha=0.4)
         plt.legend()
@@ -253,7 +255,7 @@ class InferDens(SwitchMinimizer):
         self.masked_field[self.neutral_indices_mask] = 0
         reshaped_masked = jnp.reshape(self.masked_field, self.size)
         if self.config_params.dim == 3:
-            reshaped_masked = reshaped_masked[10, :, :]
+            reshaped_masked = reshaped_masked[1, :, :]
         plt.imshow(reshaped_masked)
         plt.title("best field masked during optimization")
         plt.savefig(self.plot_direc + f"/mask.png")
@@ -280,23 +282,23 @@ class InferDens(SwitchMinimizer):
 
     def plot_pspecs(self):
         fig, axes_pspec = plt.subplots()
-        labels = np.load(self.plot_direc + f"/npy/labels.npy")
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
         self.num_k_modes = self.config_params.side_length
 
         if self.config_params.dim == 3:
             truth_field_full = np.copy(truth_field)
-            truth_field = truth_field[10, :, :]
         if self.config_params.dim == 2:
             counts, pspec_truth, kvals = circular_spec_normal(truth_field, self.config_params.num_bins, self.resolution, self.area)
         elif self.config_params.dim == 3:
-            counts, pspec_truth, kvals = spherical_p_spec_normal(truth_field_full, self.config_params.num_bins, self.resolution, self.volume)
+            counts, pspec_truth, kvals = spherical_p_spec_normal(self.truth_field, self.config_params.num_bins, self.resolution, self.volume)
 
         self.best_field = jnp.reshape(self.best_field, (self.size))
         counts, pspec_normal, kvals = spherical_p_spec_normal(self.best_field, self.config_params.num_bins,
                                                               self.resolution, self.volume)
+        axes_pspec.loglog(kvals, self.truth_final_pspec, label=f"CAMB", alpha=0.5, color="purple")
         axes_pspec.loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
-        axes_pspec.loglog(kvals, pspec_truth, label=f"Truth Field", alpha=0.5, color="blue")
+        axes_pspec.loglog(kvals, pspec_truth, label=f"Truth Field", alpha=0.5, color="red")
+        axes_pspec.legend()
         # for i, k in enumerate([0, 1, 2]):
         #     label = labels[k].replace("_", " ")
 
@@ -426,7 +428,7 @@ class InferDens(SwitchMinimizer):
                     self._add_text(residuals_axes[i][j], k, "(Current-Truth) Iteration", self.plot_title)
 
                     # Data panel for current iteration
-                    batt_model_instance = Dens2bBatt(best_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution, apply_ska=self.config_params.ska_effects)
+                    batt_model_instance = Dens2bBatt(best_field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
                     data = batt_model_instance.temp_brightness
                     im = data_axes[i][j].imshow(
                         data,
@@ -551,30 +553,21 @@ class InferDens(SwitchMinimizer):
         ax_mse.legend()
         fig_mse.savefig(f"compare_mse_post_{self.config_params.z}.png")
 
-    def plot_3_panel(self):
-        """This method gives a nice three panel plot showing the data, predicted field, and truth field"""
-        from scipy.ndimage import gaussian_filter
-        from matplotlib import colors
+    def plot_5_panel(self):
+        """This method gives a nice five panel plot showing the data, starting field, predicted field, truth field, residual"""
 
-        print("MINIMUM VALUE OF DATA FIELD")
-        print(jnp.min(self.data))
-        plt.close()
-        plt.hist(self.data.flatten(), bins=100, density=True, histtype="stepfilled")
-        plt.title("21cm values")
-        plt.savefig(f"{self.plot_direc}/plots/data_hist.png")
-        # Normalize the color range for Inferred density and Truth
-        # norm_shared = colors.Normalize(vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
-        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+        assert np.shape(self.truth_field) == np.shape(self.data)
+        assert np.shape(self.best_field_reshaped) == np.shape(self.data)
 
         residual = self.truth_field - self.best_field_reshaped
 
-        norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
-                                       vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+        # norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
 
         norm_shared_residual = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=np.min(residual),
                                        vmax=np.max(residual))
 
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(15, 5))
+        fig, (ax1, ax5, ax2, ax3, ax4) = plt.subplots(1, 5, figsize=(20, 5))
 
         # Check if fields are 3D or 2D
         if self.data.ndim == 3:
@@ -593,30 +586,132 @@ class InferDens(SwitchMinimizer):
 
         # Plotting Observed data
         im1 = ax1.imshow(data_slice, cmap="plasma")
-        ax1.set_title("Observed data" + (" (Slice {})".format(slice_idx) if self.data.ndim == 3 else ""))
+        ax1.set_title("Observed Data") # + (" (Slice {})".format(slice_idx) if self.data.ndim == 3 else ""))
         ax1.set_xlabel("Pixel #")
 
+        kurt_best = kurtosis(self.best_field_reshaped.flatten(), fisher=True)
+        kurt_truth = kurtosis(self.truth_field.flatten(), fisher=True)
+
+        skew_best = skew(self.best_field_reshaped.flatten())
+        skew_truth = skew(self.truth_field.flatten())
+
+
         # Plotting Inferred density
-        im2 = ax2.imshow(best_field_slice, norm=norm_shared)
-        ax2.set_title("Inferred density" + (" (Slice {})".format(slice_idx) if self.data.ndim == 3 else ""))
+        im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
+        ax2.set_title(f"Inferred Density") #(skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
         ax2.set_xlabel("Pixel #")
 
         # Plotting Truth
-        im3 = ax3.imshow(truth_field_slice, norm=norm_shared)
-        ax3.set_title("Truth" + (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
+        im3 = ax3.imshow(truth_field_slice) #, norm=norm_shared)
+        ax3.set_title(f"Truth") #(skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
         ax3.set_xlabel("Pixel #")
 
         # Plotting Residual (truth-best)
-        im4 = ax4.imshow(residual_slice, norm=norm_shared_residual)
-        ax4.set_title("Residual (truth-best)" + (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
+        im4 = ax4.imshow(residual_slice) #, norm=norm_shared_residual)
+        ax4.set_title("Residual") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
         ax4.set_xlabel("Pixel #")
 
+        # Plotting Starting field (truth-best)
+        im5 = ax5.imshow(jnp.reshape(self.s_field, (self.size))[slice_idx, :, :]) #, norm=norm_shared_residual)
+        ax5.set_title("Starting Field") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
+        ax5.set_xlabel("Pixel #")
+
         # Create individual colorbars
+        # Adding colorbars with consistent formatting
+        cbar1 = fig.colorbar(im1, ax=ax1, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar2 = fig.colorbar(im2, ax=ax2, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar3 = fig.colorbar(im3, ax=ax3, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar4 = fig.colorbar(im4, ax=ax4, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar5 = fig.colorbar(im5, ax=ax5, orientation='vertical', fraction=0.046, pad=0.04)
+
+        # Adjust layout to avoid overlap
+        fig.subplots_adjust(wspace=0.3)  # Adjust space between subplots
+        fig.tight_layout()
+        ## getting plot title
+        if self.config_params.noise_off:
+            fig.savefig(f"{self.plot_direc}/plots/5_panel_z_{self.config_params.z}_no_noise_.png", dpi=300)
+        else:
+            fig.savefig(f"{self.plot_direc}/plots/5_panel_z_{self.config_params.z}_w_noise.png", dpi=300)
+        print("Saving three panel plot...")
+
+        plt.close()
+
+    def plot_3_panel(self):
+        """This method gives a nice three panel plot showing the data, predicted field, and truth field"""
+        print("MINIMUM VALUE OF DATA FIELD")
+        print(jnp.min(self.data))
+        plt.close()
+        plt.hist(self.data.flatten(), bins=100, density=True, histtype="stepfilled")
+        plt.title("21cm values")
+        plt.savefig(f"{self.plot_direc}/plots/data_hist.png")
+        # Normalize the color range for Inferred density and Truth
+        # norm_shared = colors.Normalize(vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+
+        assert np.shape(self.truth_field) == np.shape(self.data)
+        assert np.shape(self.best_field_reshaped) == np.shape(self.data)
+
+        residual = self.truth_field - self.best_field_reshaped
+
+        # norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+
+        norm_shared_residual = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=np.min(residual),
+                                       vmax=np.max(residual))
+
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20, 5))
+
+        # Check if fields are 3D or 2D
+        if self.data.ndim == 3:
+            slice_idx = 10  # You can change this to the desired slice
+            data_slice = self.data[slice_idx, :, :]
+            best_field_slice = self.best_field_reshaped[slice_idx, :, :]
+            truth_field_slice = self.truth_field[slice_idx, :, :]
+        else:
+            # If fields are 2D, no slicing needed
+            data_slice = self.data
+            best_field_slice = self.best_field_reshaped
+            truth_field_slice = self.truth_field
+
+        # Calculate the residual (truth - best)
+        residual_slice = truth_field_slice - best_field_slice
+
+        # Plotting Observed data
+        im1 = ax1.imshow(data_slice, cmap="plasma")
+        ax1.set_title("Observed Data") # + (" (Slice {})".format(slice_idx) if self.data.ndim == 3 else ""))
+        ax1.set_xlabel("Pixel #")
+
+        kurt_best = kurtosis(self.best_field_reshaped.flatten(), fisher=True)
+        kurt_truth = kurtosis(self.truth_field.flatten(), fisher=True)
+
+        skew_best = skew(self.best_field_reshaped.flatten())
+        skew_truth = skew(self.truth_field.flatten())
+
+
+        # Plotting Inferred density
+        im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
+        ax2.set_title(f"Inferred Density") #(skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
+        ax2.set_xlabel("Pixel #")
+
+        # Plotting Truth
+        im3 = ax3.imshow(truth_field_slice) #, norm=norm_shared)
+        ax3.set_title(f"Truth") #(skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
+        ax3.set_xlabel("Pixel #")
+
+        # Plotting Residual (truth-best)
+
+        im4 = ax4.imshow(residual_slice) #, norm=norm_shared_residual)
+        ax4.set_title("Residual") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
+        ax4.set_xlabel("Pixel #")
+        # Create individual colorbars
+        # Adding colorbars with consistent formatting
         cbar1 = fig.colorbar(im1, ax=ax1, orientation='vertical', fraction=0.046, pad=0.04)
         cbar2 = fig.colorbar(im2, ax=ax2, orientation='vertical', fraction=0.046, pad=0.04)
         cbar3 = fig.colorbar(im3, ax=ax3, orientation='vertical', fraction=0.046, pad=0.04)
         cbar4 = fig.colorbar(im4, ax=ax4, orientation='vertical', fraction=0.046, pad=0.04)
 
+        # Adjust layout to avoid overlap
+        fig.subplots_adjust(wspace=0.3)  # Adjust space between subplots
         fig.tight_layout()
 
         ## getting plot title
@@ -708,7 +803,7 @@ class InferDens(SwitchMinimizer):
     def make_ionisation_level_residual_plot(self):
         plt.close()
         residual = self.truth_field.flatten() - self.best_field.flatten()
-        batt_model_instance = Dens2bBatt(self.truth_field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution)
+        batt_model_instance = Dens2bBatt(self.truth_field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params)
 
         x_HII = 1- batt_model_instance.X_HI
         plt.scatter(x_HII, residual)
@@ -772,73 +867,126 @@ class ConfigParam:
         self.create_instance = create_instance
         assert(self.new_prior != self.old_prior)
 
-def grid_test(free_param_name, free_param_arr, static_redshift=True, ska_effects=False, fiducial_params=fiducial_params):
+# Print the result to verify
+print(f'SKA Effects Enabled: {ska_effects}')
+
+k_0_fiducial = 0.185 * 0.676 # changing from Mpc/h to Mpc
+alpha_fiducial = 0.564
+b_0_fiducial = 0.593
+midpoint_z_fiducial = 7
+tan_fiducial = 1
+
+static_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tan_slope": tan_fiducial,
+                   "avg_z": midpoint_z_fiducial}  # b_0=0.5, alpha=0.2, k_0=0.1)
+
+def grid_test(free_param_name, free_param_arr, static_redshift=True,
+              ska_effects=False,
+              nominal=False, side_length=128, physical_side_length=128, bins=64, brightness_temperature_field=None,
+              truth_field=None, iter_num_max=3, rest_num_max=3, nothing_off=True):
     import GPUtil
     import gc
+    fiducial_params = static_params.copy()
     # try to stop this from crashing
-    for free_param in free_param_arr:
-        gpu = GPUtil.getGPUs()[0]
-        print(
-            f"GPU ID: {gpu.id}, Memory Free: {gpu.memoryFree}MB, Memory Used: {gpu.memoryUsed}MB, Memory Total: {gpu.memoryTotal}MB")
-        if free_param_arr == [None]:  # no free parameters
-            z = fiducial_params["redshift_run"]
-        else:
-            free_param = np.round(free_param, decimals=4)
-            if static_redshift:
+    if nominal:
+        z = fiducial_params["redshift_run"]
 
-                fiducial_params[free_param_name] = free_param # update fiducial param list with varying parameter
-                z = fiducial_params["redshift_run"]
-            else: # varying redshift
-                z = free_param
-        params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=None,  brightness_temperature_field=None, num_bins=12,
-                             nothing_off=True, plot_direc="", side_length=64, physical_side_length=32,
-                             dimensions=3, iter_num_max=1, rest_num_max=3, noise_off=True,
+        params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=truth_field,  brightness_temperature_field=brightness_temperature_field, num_bins=bins,
+                             nothing_off=nothing_off, plot_direc="", side_length=side_length, physical_side_length=physical_side_length,
+                             dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
                              save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
                              weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
                              debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
                              create_instance=False)
-        samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
-        samp.make_ionisation_level_residual_plot()
-        samp.plot_3_panel()
-        samp.plot_mask()
-        samp.plot_pspecs()
-        gc.collect()
+
+    else:
+        for free_param in free_param_arr:
+            gpu = GPUtil.getGPUs()[0]
+            print(
+                f"GPU ID: {gpu.id}, Memory Free: {gpu.memoryFree}MB, Memory Used: {gpu.memoryUsed}MB, Memory Total: {gpu.memoryTotal}MB")
+            if free_param_arr == [None]:  # no free parameters
+                z = fiducial_params["redshift_run"]
+            else:
+                free_param = np.round(free_param, decimals=4)
+                if static_redshift:
+
+                    fiducial_params[free_param_name] = free_param # update fiducial param list with varying parameter
+                    z = fiducial_params["redshift_run"]
+                else: # varying redshift
+                    z = free_param
+            params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=truth_field,  brightness_temperature_field=brightness_temperature_field, num_bins=bins,
+                                 nothing_off=nothing_off, plot_direc="", side_length=side_length, physical_side_length=physical_side_length,
+                                 dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
+                                 save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
+                                 weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
+                                 debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
+                                 create_instance=False)
+
+    # DO FOR BOTH
+    samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
+    samp.make_ionisation_level_residual_plot()
+    samp.plot_5_panel()
+    samp.plot_3_panel()
+    samp.plot_mask()
+    samp.plot_mask()
+    samp.plot_pspecs()
+    gc.collect()
+
+
 
 if __name__ == "__main__":
     run_optimizer = True
+    for z in [12, 11, 10, 9, 8, 7, 6]:
+        static_params["redshift_run"] = z
+        # truth_field = np.load(f"21cmfast_fields_1Mpcpp/density_{z}.npy")
+        # brightness_temperature_field = np.load(f"21cmfast_fields_1Mpcpp/brightness_temp_{z}.npy")
 
-
-    # grid_test("none", [None], static_redshift=True, ska_effects=ska_effects,
-    #               fiducial_params=fiducial_params)
-
-
-    # Define parameter ranges
-    alphas = np.linspace(0.1, 2, 20)
-    b_0s = np.logspace(-2, 2, 20)
-    k_0s = np.logspace(-2, 2, 20)
-    avg_z = np.linspace(5, 8, 20)
+        grid_test("none", [None], static_redshift=True, ska_effects=False, nominal=True,
+                  bins=32, side_length=128, physical_side_length=128, iter_num_max=1, rest_num_max=3,
+                  truth_field=[], brightness_temperature_field=[], nothing_off=False)
+        exit()
+        # Define parameter ranges
+    alpha_values = np.linspace(0.1, 2, 10)
+    b_0_values = np.logspace(-2, 2, 10)
+    k_0_values = np.logspace(-2, 2, 10)
+    avg_z_values = np.linspace(5, 8, 10)
 
     # Create a mesh grid
-    alpha_grid, b_0_grid, k_0_grid, avg_z_grid = np.meshgrid(alphas, b_0s, k_0s, avg_z, indexing='ij')
+    # alpha_grid, b_0_grid, k_0_grid, avg_z_grid = np.meshgrid(alphas, b_0s, k_0s, avg_z, indexing='ij')
 
     # Reshape to create a list of all combinations
-    alpha_values = alpha_grid.flatten()
-    b_0_values = b_0_grid.flatten()
-    k_0_values = k_0_grid.flatten()
-    avg_z_values = avg_z_grid.flatten()
+    # alpha_values = alpha_grid.flatten()
+    # b_0_values = b_0_grid.flatten()
+    # k_0_values = k_0_grid.flatten()
+    # avg_z_values = avg_z_grid.flatten()
 
     # Number of parameter combinations
-    num_combinations = alpha_values.size
+    # num_combinations = alpha_values.size
     # Iterate over each combination of parameters
-    for i in range(num_combinations):
-        print(f"Completed {i} out of {num_combinations}!")
-        alpha = alpha_values[i]
-        b_0 = b_0_values[i]
-        k_0 = k_0_values[i]
-        avg_z = avg_z_values[i]
+    
+    for z in [6.5, 7, 8, 9, 10]:
+        for i in range(len(alpha_values)):
+            static_params["redshift_run"] = z
+            alpha = alpha_values[i]
+            b_0 = b_0_values[i]
+            k_0 = k_0_values[i]
+            avg_z = avg_z_values[i]
+            truth_field = np.load(f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/21cmfast_fields/density_{z}.npy")
+            brightness_temperature_field = np.load(f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/21cmfast_fields/brightness_temp_{z}.npy")
+            print(np.shape(truth_field))
+            grid_test("alpha", [alpha], static_redshift=True, ska_effects=ska_effects, truth_field=truth_field, brightness_temperature_field=brightness_temperature_field)
+            grid_test("b_0", [b_0], static_redshift=True, ska_effects=ska_effects, truth_field=truth_field, brightness_temperature_field=brightness_temperature_field)
+            grid_test("k_0", [k_0], static_redshift=True, ska_effects=ska_effects, truth_field=truth_field, brightness_temperature_field=brightness_temperature_field)
+            grid_test("avg_z", [avg_z], static_redshift=True, ska_effects=ska_effects, truth_field=truth_field, brightness_temperature_field=brightness_temperature_field)
 
-        # Call your `grid_test` function with these parameters
-        grid_test("alpha", [alpha], static_redshift=True, ska_effects=ska_effects)
-        grid_test("b_0", [b_0], static_redshift=True, ska_effects=ska_effects)
-        grid_test("k_0", [k_0], static_redshift=True, ska_effects=ska_effects)
-        grid_test("avg_z", [avg_z], static_redshift=False, ska_effects=ska_effects)
+        # for i in range(num_combinations_start, num_combinations):
+        #     print(f"Completed {i} out of {num_combinations} for z = {z}!")
+        #     alpha = alpha_values[i]
+        #     b_0 = b_0_values[i]
+        #     k_0 = k_0_values[i]
+        #     avg_z = avg_z_values[i]
+        # 
+        #     # Call your `grid_test` function with these parameters
+        #     grid_test("alpha", [alpha], static_redshift=True, ska_effects=ska_effects)
+        #     grid_test("b_0", [b_0], static_redshift=True, ska_effects=ska_effects)
+        #     grid_test("k_0", [k_0], static_redshift=True, ska_effects=ska_effects)
+        #     grid_test("avg_z", [avg_z], static_redshift=True, ska_effects=ska_effects)

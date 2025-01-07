@@ -18,7 +18,7 @@ from jax.scipy.optimize import \
 # from jax.example_libraries import optimizers as jaxopt
 import jaxopt
 import theory_matter_ps
-from theory_matter_ps import circular_spec_normal, spherical_p_spec_normal, after_spherical_p_spec_normal
+from theory_matter_ps import after_spherical_p_spec_normal, spherical_p_spec_normal
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
@@ -28,7 +28,7 @@ from matplotlib.colors import SymLogNorm
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
-config.update("jax_debug_nans", True)
+# config.update("jax_debug_nans", True)
 
 # nice publication fonts for plots are implemented when these lines are uncommented
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
@@ -55,7 +55,7 @@ class SwitchMinimizer:
         self.s_field = s_field
 
         ## new stuff
-        self.resolution = self.config_params.side_length / self.config_params.physical_side_length  # number of pixels / physical side length
+        self.resolution = self.config_params.physical_side_length / self.config_params.side_length # physical side length / number of pixels [Mpc/pixel]
         print("resolution ", self.resolution)
         self.area = self.config_params.side_length ** 2
         self.volume = self.config_params.side_length**3
@@ -86,80 +86,93 @@ class SwitchMinimizer:
             # just getting methods and instance
             return
         ### get *latent space* (z or unbiased field) and *data* only if self.data = np.array([None]) ##############################
-        if self.config_params.data == None and self.config_params.truth_field == None:
+        if len(self.config_params.data) == 0:
+        # if self.config_params.data == None:
+
             ### 1) create latent space (density field)
             pb_data_unbiased_field = self.create_better_normal_field(seed=self.config_params.seed).delta_x()
             # truth field is just unbiased version made with pbox
             self.truth_field = jnp.asarray(pb_data_unbiased_field)
-            # self.truth_field = pb_data_unbiased_field
-            # if self.old_prior: #old version
-            # calculating both regardless of prior
-            if self.config_params.use_truth_mm:  # use theory matter power spectrum in prior
-                if self.config_params.old_prior:
-                    self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true,
-                                                                                               self.config_params.side_length,
-                                                                                               self.config_params.z)
-                    self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
-                        self.pspec_2d_true + 1j * self.pspec_2d_true)
+            print("STANDARD DEVIATION OF TRUTH FIELD")
+            print(jnp.std(self.truth_field))
 
-
-
-            else:  # use individual realization of a field's power spectrum in prior
-                self.fft_truth = self.fft_jax(self.truth_field)
-                self.pspec_box = jnp.abs(self.fft_truth) ** 2
-                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
-                    self.pspec_box + 1j * self.pspec_box)
-
-            # elif self.new_prior:
-            if self.config_params.dim == 2:
-                counts, self.p_spec_truth_realization, k_vals_all = circular_spec_normal(self.truth_field,
-                                                                                         self.config_params.num_bins,
-                                                                                         self.resolution,
-                                                                                         self.area)
-            if self.config_params.dim == 3:
-                counts, self.p_spec_truth_realization, k_vals_all = spherical_p_spec_normal(self.truth_field, self.config_params.num_bins, self.resolution, self.volume)
-
-            if self.config_params.use_truth_mm:
-                self.truth_final_pspec = self.pspec_true(k_vals_all)
-
-
-            plt.close()
-            plt.loglog(k_vals_all, self.p_spec_truth_realization, label="everything")
-            mask_high_only = k_vals_all > 2
-            plt.loglog(k_vals_all[mask_high_only], self.p_spec_truth_realization[mask_high_only], label="upper ks only")
-            plt.legend()
-            plt.show()
-            plt.close()
-
-            plt.close()
-            plt.loglog(k_vals_all, counts)
-            plt.xlabel("k vals")
-            plt.ylabel("counts")
-            plt.show()
-            plt.close()
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
             if self.config_params.ska_effects:
-                self.ska = SKAEffects(self.data, True, self.config_params.z, self.resolution)
+                self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
                 self.data = self.ska.brightness_temp
         else:  # data included in initialization of class
-            # print("Using previously generated data and truth field.")
+            print("Using previously generated data and truth field.")
             assert (jnp.shape(self.config_params.truth_field)[0] != 0)
             assert (jnp.shape(self.config_params.data)[0] != 0)
-            self.data = self.config_params.data
             self.truth_field = self.config_params.truth_field
-            print("Not yet implemented")
-            exit()
+            self.data = self.bias_field(self.truth_field)
+            print("NOT USING 21cmFAST DATA")
+
+            if self.config_params.ska_effects:
+                self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
+                self.data = self.ska.brightness_temp
+            # print("Not yet implemented")
+            # exit()
         ###############################################################################################################
+        ## SETTING UP PRIOR
+        # calculating both regardless of prior
+        if self.config_params.use_truth_mm:  # use theory matter power spectrum in prior
+            if self.config_params.old_prior:
+                self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true,
+                                                                                           self.config_params.side_length,
+                                                                                           self.config_params.z)
+                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
+                    self.pspec_2d_true + 1j * self.pspec_2d_true)
+
+
+
+        else:  # use individual realization of a field's power spectrum in prior
+            self.fft_truth = self.fft_jax(self.truth_field)
+            self.pspec_box = jnp.abs(self.fft_truth) ** 2
+            self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
+                self.pspec_box + 1j * self.pspec_box)
+
+        # elif self.new_prior:
+        if self.config_params.dim == 2:
+            counts, self.p_spec_truth_realization, k_vals_all = circular_spec_normal(self.truth_field,
+                                                                                     self.config_params.num_bins,
+                                                                                     self.resolution,
+                                                                                     self.area)
+        if self.config_params.dim == 3:
+            counts, self.p_spec_truth_realization, k_vals_all = spherical_p_spec_normal(self.truth_field,
+                                                                                        self.config_params.num_bins,
+                                                                                        self.resolution, self.volume)
+
+        if self.config_params.use_truth_mm:
+            self.truth_final_pspec = self.pspec_true(k_vals_all)
+
+        # plt.close()
+        # plt.loglog(k_vals_all, self.p_spec_truth_realization, label="everything")
+        # mask_high_only = k_vals_all > 2
+        # plt.loglog(k_vals_all[mask_high_only], self.p_spec_truth_realization[mask_high_only], label="upper ks only")
+        # plt.legend()
+        # plt.show()
+        # plt.close()
+        #
+        # plt.close()
+        # plt.loglog(k_vals_all, counts)
+        # plt.xlabel("k vals")
+        # plt.ylabel("counts")
+        # plt.show()
+        # plt.close()
+
+        ##############################################################################################################
         # print("Ionized pixels if < 15")
-        self.ionized_indices = jnp.argwhere(self.data < 5)
-        self.neutral_indices = jnp.argwhere(self.data > 5)
+        ionized_threshold = 0.1
+        self.ionized_indices = jnp.argwhere(self.data < ionized_threshold)
+        self.neutral_indices = jnp.argwhere(self.data > ionized_threshold)
 
-        self.ionized_indices_flattened = jnp.argwhere(self.data.flatten() < 5).flatten()
-        self.neutral_indices_flattened = jnp.argwhere(self.data.flatten() > 5).flatten()
+        self.ionized_indices_flattened = jnp.argwhere(self.data.flatten() < ionized_threshold).flatten()
+        self.neutral_indices_flattened = jnp.argwhere(self.data.flatten() > ionized_threshold).flatten()
 
-        self.ionized_indices_mask = (self.data < 5).flatten()
-        self.neutral_indices_mask = (self.data > 5).flatten()
+        self.ionized_indices_mask = (self.data < ionized_threshold).flatten()
+        self.neutral_indices_mask = (self.data > ionized_threshold).flatten()
         # self.truth_field = self.truth_field.at[self.ionized_indices].set(0)
 
         # generate diagonal matrices for chi-squared and adding noise if selected #####################################
@@ -172,8 +185,11 @@ class SwitchMinimizer:
             self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
         else:
             self.rms_Tb = jnp.std(self.data)
-            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+            self.rms_Tb = 1
 
+            # self.generate_data_cov()
+            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+            # self.N_diag = self.data_cov
         # print("N_diagonal")
         # id_print(self.N_diag)
         ###############################################################################################################
@@ -202,6 +218,28 @@ class SwitchMinimizer:
             # self.s_field = self.truth_field.flatten()
 
         ###############################################################################################################
+
+    def generate_data_cov(self, samples=100):
+        """
+        Generate data covariance
+        """
+        # Create a PRNGKey (Pseudo-Random Number Generator key)
+        self.side_length = np.shape(self.data)[0]
+        self.dim =3
+        key = jax.random.PRNGKey(0)  # '0' is the seed for reproducibility
+        cov_input = np.empty((samples, self.side_length**self.dim))
+        # Generate a random integer between 0 and 1000
+        for i in range(samples): # generate 100 draws of 3D data
+            random_int = jax.random.randint(key, shape=(), minval=0, maxval=1001)  # maxval is exclusive
+            pb_data_unbiased_field = self.create_better_normal_field(seed=random_int).delta_x()
+            # truth field is just unbiased version made with pbox
+            mock_truth_field = jnp.asarray(pb_data_unbiased_field)
+            cov_input[i, :] = self.bias_field(mock_truth_field).flatten()
+        cov_input_transposed = cov_input.T
+        # assert(np.shape(cov_input_transposed) == (self.side_length**self.dim, samples))
+        self.data_cov = np.cov(cov_input_transposed)
+        print(np.shape(self.data_cov))
+        # assert(np.shape(self.data_cov) == (self.side_length**(self.dim*2)))
 
     def create_normal_field(self, std_dev):
         """This method creates a numpy random field and converts it to a Jax array"""
@@ -235,7 +273,7 @@ class SwitchMinimizer:
         # truth_field_flattened = self.truth_field.flatten()
         # self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
 
-        # # print("-----------------")
+        # print("-----------------")
         self.run_grad_descent()
 
     def run_grad_descent(self):
@@ -268,7 +306,9 @@ class SwitchMinimizer:
                                   stop_if_linesearch_fails=True)
 
         params, state = opt_result.run(self.s_field)
-        # jax.debug.print('failed linesearch? {}', state.failed_linesearch)
+        print("-----------------------------------")
+        jax.debug.print('failed linesearch? {}', state.failed_linesearch)
+        print("-----------------------------------")
         # print("How many iterations did it take?")
         # print(self.iter_num)
         self.final_func_val = state.value
@@ -310,12 +350,14 @@ class SwitchMinimizer:
             candidate_field = jnp.reshape(guess, self.size)
 
 
-        # note param_init was passed in and is a constant
+        # difference between the candidate and truth field
         discrepancy = self.data - self.bias_field(candidate_field)
+        # jax.debug.print("discrepancy {x} 🤯", x=discrepancy[:1])
 
         #### get likelihood for all cases #############################################################################
-        x = (discrepancy.flatten() ** 2) * 1. / self.N_diag
-        likelihood = jnp.mean(x)
+        # x = discrepancy.flatten() @ self.data_cov @ discrepancy.flatten()
+        field_likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+        likelihood = np.sum(field_likelihood)
         ###############################################################################################################
         # want circular/spherical pspec regardless of which prior we use
         if self.config_params.dim == 2:
@@ -324,11 +366,13 @@ class SwitchMinimizer:
         elif self.config_params.dim == 3:
             counts, power_curr, k_values = spherical_p_spec_normal(candidate_field, self.config_params.num_bins, self.resolution,
                                                                    self.area)
-        # also want difference between the candidate and truth field
+        # difference between power spectra
         if self.config_params.use_truth_mm:
-            x = (self.truth_final_pspec - power_curr).flatten()
+            pspec_difference = (self.truth_final_pspec - power_curr).flatten()
+            # jax.debug.print("🤯 {x} 🤯", x=pspec_difference)
+
         else:
-            x = (self.p_spec_truth_realization - power_curr).flatten()
+            pspec_difference = (self.p_spec_truth_realization - power_curr).flatten()
 
         if self.config_params.old_prior:  # old version
             # FT and get only the independent modes
@@ -342,22 +386,14 @@ class SwitchMinimizer:
 
             prior = (real_prior + imag_prior) / self.side_length**self.dim
         elif self.config_params.new_prior:
-            if self.config_params.dim == 2:
-                counts, power_curr, k_values = circular_spec_normal(candidate_field, self.config_params.num_bins, self.resolution, self.area)
-            elif self.config_params.dim == 3:
-                counts, power_curr, k_values = spherical_p_spec_normal(candidate_field,  self.config_params.num_bins, self.resolution, self.volume)
-                after_counts, after_power_curr, after_k_values = after_spherical_p_spec_normal(candidate_field, self.config_params.num_bins, self.resolution, self.volume)
-            x = (self.truth_final_pspec - power_curr).flatten()
-            sigma = counts ** 2
-            prior = jnp.mean((x**2) * sigma)
-            print("prior multiplies sigma")
-        
+            # sigma = counts ** 2
+            prior = jnp.mean((pspec_difference**2)) #* counts ** 2)
+
         if self.likelihood_off:
-            # likelihood = 10**-2 *  likelihood
             likelihood = 0
         elif self.prior_off:
             prior = 0
-
+        # likelihood = 0
         self.final_likelihood_prior = prior + likelihood
 
         if self.config_params.verbose:
@@ -419,7 +455,7 @@ class SwitchMinimizer:
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
-        batt_model_instance = Dens2bBatt(field, delta_pos=1, set_z=self.config_params.z, flow=True, free_params=self.config_params.free_params, resolution=self.resolution, apply_ska=self.config_params.ska_effects)
+        batt_model_instance = Dens2bBatt(field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
 

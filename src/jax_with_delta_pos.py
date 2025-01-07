@@ -18,23 +18,15 @@ class Dens2bBatt:
     """
     This class follows the Battaglia et al (2013) model to go from a density field to a temperature brightness field.
     """
-    def __init__(self, density, set_z, physical_side_length, resolution, flow=True, debug=False, free_params={}, apply_ska=False): # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
+    def __init__(self, density, delta_pos, set_z, physical_side_length, flow=True, debug=False, free_params={}, apply_ska=False): # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
         self.debug = debug
-        self.density = density
-        self.set_z = set_z
-        self.physical_side_length = physical_side_length
-        self.density = density
         self.b_0 = free_params['b_0']
         self.alpha = free_params['alpha']
         self.k_0 = free_params['k_0']
         self.tanh_slope = free_params['tanh_slope']
         self.avg_z = free_params['avg_z']
         self.apply_ska = apply_ska
-        self.resolution = resolution
-
-        self.integrand = self.density
-
-        assert (self.resolution == self.physical_side_length / jnp.shape(self.density)[0]) # assert resolution in Mpc/pixel
+        self.physical_side_length = physical_side_length
         
         if density.ndim == 1:
             self.one_d = True
@@ -52,25 +44,40 @@ class Dens2bBatt:
             print("Unsupported field dimensions!")
             exit()
 
-
+        self.density = density
+        self.set_z = set_z
+        self.delta_pos = delta_pos  # Mpc
 
         if self.one_d:
             self.cube_len = len(self.density)
-            self.ks = jnp.fft.fftfreq(len(self.density)) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+            self.integrand = self.density * self.delta_pos  # weird FFT scaling for 1D
+            self.ks = jnp.fft.fftfreq(len(self.density), self.delta_pos)
             self.k_mags = jnp.abs(self.ks)
             self.X_HI = jnp.empty(self.cube_len)
             self.delta_k = self.ks[1] - self.ks[0]
 
         elif self.two_d: # assuming 2D
             self.cube_len = len(self.density[:, 0])
-            self.kx = self.ky = jnp.fft.fftfreq(self.density.shape[0]) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+            self.integrand = self.density * (self.delta_pos**2) # weird FFT scaling for 2D
+            self.kx = jnp.fft.fftfreq(self.density.shape[0], self.delta_pos)
+            self.ky = jnp.fft.fftfreq(self.density.shape[1], self.delta_pos)
+            self.kx *= 2 * jnp.pi  # scaling k modes correctly
+            self.ky *= 2 * jnp.pi  # scaling k modes correctly
             self.k_mags = jnp.sqrt(self.kx ** 2 + self.ky[:,None] ** 2)
             self.delta_k = self.kx[1] - self.kx[0]
             self.xdim = self.ydim = self.cube_len
 
         elif self.three_d: # assuming 3D
             self.cube_len = len(self.density[:, 0, 0])
-            self.kx = self.ky = self.kz = jnp.fft.fftfreq(self.density.shape[0]) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+            self.integrand = self.density * (self.delta_pos**3) # weird FFT scaling for 3D
+
+            self.kx = jnp.fft.fftfreq(self.density.shape[0], self.delta_pos)
+            self.ky = jnp.fft.fftfreq(self.density.shape[1], self.delta_pos)
+            self.kz = jnp.fft.fftfreq(self.density.shape[2], self.delta_pos)
+
+            self.kx *= 2 * jnp.pi  # scaling k modes correctly
+            self.ky *= 2 * jnp.pi  # scaling k modes correctly
+            self.kz *= 2 * jnp.pi  # scaling k modes correctly
 
             k1, k2, k3 = jnp.meshgrid(self.kx, self.ky, self.kz)  # 3D!! meshgrid :)
             self.k_mags = jnp.sqrt(k1 ** 2 + k2 ** 2 + k3 ** 2)
@@ -79,11 +86,11 @@ class Dens2bBatt:
             self.delta_k = self.kx[1] - self.kx[0]
             self.xdim = self.ydim = self.zdim = self.cube_len
 
-        self.density_k = jnp.fft.fftn(self.integrand) * self.resolution**(self.density.ndim) # pixels^n -> Mpc^n, get normalization right
+        self.density_k = jnp.fft.fftn(self.integrand)
 
         self.rs_top_hat_3d = lambda k: 3 * (jnp.sin(k) - jnp.cos(k) * k) / k ** 3  # pixelate and smoothing?
         self.rs_top_hat_3d_exp = lambda k: 1 - k ** 2 / 10
-        self.rs_top_hat_1d = lambda arg: jnp.sinc(arg / jjnp.pi)  # engineer's sinc so divide argument by pi
+        self.rs_top_hat_1d = lambda arg: jnp.sinc(arg / jnp.pi)  # engineer's sinc so divide argument by pi
         if self.two_d:
             self.rs_top_hat_2d_norm = lambda k: 2 * j_bessel(k) / k
             self.rs_top_hat_2d_exp = lambda k: 2 * k / 2 - ((k / 2) ** 3) / 2
@@ -105,16 +112,17 @@ class Dens2bBatt:
 
 
     def apply_filter(self):
-        w_z = self.b_mz(self.k_mags)
-        self.density_k *= w_z
-        # if self.one_d:
-        #     self.density_k *= self.delta_k
-        # elif self.two_d:
-        #     self.density_k *= self.delta_k**2
-        # elif self.three_d:
-        #     self.density_k *= self.delta_k**3 # scaling amplitude in fourier space for 3D
+        w_z = self.b_mz(self.k_mags * self.delta_pos)
 
-        self.delta_z = jnp.fft.ifftn(self.density_k) * (1/self.resolution**(self.density.ndim)) # get normalization right
+        self.density_k *= w_z
+        if self.one_d:
+            self.density_k *= self.delta_k
+        elif self.two_d:
+            self.density_k *= self.delta_k**2
+        elif self.three_d:
+            self.density_k *= self.delta_k**3 # scaling amplitude in fourier space for 3D
+
+        self.delta_z = jnp.fft.ifftn(self.density_k)
 
 
         ### SMOOTHING
@@ -124,12 +132,12 @@ class Dens2bBatt:
         # self.delta_z = jsp.signal.convolve(self.delta_z, window, mode='same')
         ###
 
-        # if self.one_d:
-        #     self.delta_z *= self.cube_len / (2*jjnp.pi)
-        # elif self.two_d:
-        #     self.delta_z *= (self.cube_len**2) / (2*jjnp.pi)**2
-        # elif self.three_d:
-        #     self.delta_z *= (self.cube_len**3)/(2*jjnp.pi)**3 # weird FFT scaling for 3D, getting rid of 1/n^3
+        if self.one_d:
+            self.delta_z *= self.cube_len / (2*jnp.pi)
+        elif self.two_d:
+            self.delta_z *= (self.cube_len**2) / (2*jnp.pi)**2
+        elif self.three_d:
+            self.delta_z *= (self.cube_len**3)/(2*jnp.pi)**3 # weird FFT scaling for 3D, getting rid of 1/n^3
 
         if self.debug and self.two_d:
             plt.close()
@@ -158,21 +166,13 @@ class Dens2bBatt:
     def get_x_hi(self, tanh=True):
         if tanh:
             self.z_re = jnp.real(self.z_re)
-            self.X_HI = (jnp.tan(self.tanh_slope*(self.set_z - self.z_re)) + 1) / 2.
-        else:
-            self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
-
+            self.X_HI = (jnp.tanh(self.tanh_slope*(self.set_z - self.z_re)) + 1) / 2.
         return self.X_HI
 
     def get_temp_brightness(self):
         first = 27 * self.X_HI
         second = 1 + self.density
         self.temp_brightness = first*second
-
-        # print("---------------")
-        # print("residual for FFT check")
-        # jax.debug.print('"residual for FFT check"? {}',jnp.sum(self.density - self.delta_z))
-        # print("---------------")
 
 
     def flow(self):
