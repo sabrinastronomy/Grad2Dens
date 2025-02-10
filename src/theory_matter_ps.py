@@ -85,23 +85,27 @@ def after_spherical_p_spec_normal(field, nbins, resolution, volume):
     square after averaging (histogramming)
     RESOLUTION IS [MPC/PIXEL]
     """
+    """
+    3D field
+    square before averaging (histogramming)
+    RESOLUTION IS [MPC/PIXEL]
+    """
     curr_side_length = np.shape(field)[0]
     fft_data = np.fft.fftn(field)
-    fft_data = np.abs(fft_data)
+    fft_data_abs= np.abs(fft_data)
     k_arr = np.fft.fftfreq(curr_side_length) * 2 * np.pi
     k_arr *= 1 / resolution
-    k1, k2, k3 = np.meshgrid(k_arr, k_arr, k_arr)  # 3D!! meshgrid :)
+    k1, k2, k3 = np.meshgrid(k_arr, k_arr, k_arr) # 3D!! meshgrid :)
     k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2 + k3 ** 2)
 
     counts, bin_edges = np.histogram(k_mag_full, nbins)
-    binned_fft, _ = np.histogram(k_mag_full, nbins, weights=fft_data)
+    binned_power, _ = np.histogram(k_mag_full, nbins, weights=fft_data_abs)
 
     bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
                  np.histogram(k_mag_full, nbins)[0])  # mean k value in each bin
-    pspec = binned_fft**2 / counts  # average power in each bin
-    print(f"resolution, {resolution} mpc/pixel")  # mpc/pixels
-    pspec /= volume  # pixels^6 to pixels^3
-    pspec *= resolution ** 3  # converting form pixels^3 to Mpc^3
+    pspec = binned_power**2 / counts  # average power in each bin
+    pspec /= volume # pixels^6 to pixels^3
+    pspec *= resolution**3 # converting form pixels^3 to Mpc^3
     return counts, pspec, bin_means
 
 def get_truth_matter_pspec(kmax, side_length, z, dim):

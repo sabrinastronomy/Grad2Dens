@@ -158,7 +158,7 @@ class Dens2bBatt:
     def get_x_hi(self, tanh=True):
         if tanh:
             self.z_re = jnp.real(self.z_re)
-            self.X_HI = (jnp.tan(self.tanh_slope*(self.set_z - self.z_re)) + 1) / 2.
+            self.X_HI = (jnp.tanh(self.tanh_slope*(self.set_z - self.z_re)) + 1) / 2.
         else:
             self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
 
@@ -168,12 +168,18 @@ class Dens2bBatt:
         first = 27 * self.X_HI
         second = 1 + self.density
         self.temp_brightness = first*second
+        # self.temp_brightness = self.normalize(self.temp_brightness)
 
         # print("---------------")
         # print("residual for FFT check")
         # jax.debug.print('"residual for FFT check"? {}',jnp.sum(self.density - self.delta_z))
         # print("---------------")
 
+    # def normalize(self, field):
+    #     min_field = jnp.min(field)
+    #     max_field = jnp.max(field)
+    #     diff = max_field - min_field
+    #     return (field - min_field) / diff
 
     def flow(self):
         self.apply_filter()

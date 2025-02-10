@@ -13,7 +13,7 @@ import os
 from matplotlib.ticker import MaxNLocator
 from jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import spherical_p_spec_normal
+from theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal
 import argparse
 from scipy.ndimage import gaussian_filter
 from matplotlib import colors
@@ -70,7 +70,7 @@ class InferDens(SwitchMinimizer):
         self.labels = []
         self.iter_failed_line_search_arr = []
         if config_params.plot_direc == "":
-            self.perc_ionized = round(len(self.ionized_indices) / self.config_params.side_length**self.config_params.dim, 1)
+            self.perc_ionized = round(len(self.ionized_indices) / self.config_params.side_length**self.config_params.dim, 5)
             str_free_params = "_".join([f"{key}-{value}" for key, value in self.config_params.free_params.items()])
 
             if config_params.old_prior:
@@ -95,6 +95,8 @@ class InferDens(SwitchMinimizer):
 
         print("Saving plots here...")
         print(self.plot_direc)
+        print("Saved config parameters.")
+        self.config_params.save_to_file(directory=self.plot_direc)
 
         if run_optimizer:
             self.infer_density_field()
@@ -127,7 +129,7 @@ class InferDens(SwitchMinimizer):
                     self.mask_ionized = False
                 else:
                     # first iteration, we keep just the likelihood on
-                    self.prior_off = True
+                    self.prior_off = False
                     self.likelihood_off = False
                     self.mask_ionized = False
                 ####
@@ -143,8 +145,8 @@ class InferDens(SwitchMinimizer):
                     print("Prior ON")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=False, iter_num_big=iter_num_big)
 
-                self.check_field(self.s_field_original, "starting field", show=False, save=True,
-                                 iteration_number=-1)
+                # self.check_field(self.s_field_original, "starting field", show=False, save=True,
+                #                  iteration_number=-1)
                 self.check_field(self.truth_field, "truth field", show=False, save=True,
                                  iteration_number=-1)
                 self.check_field(self.data, "data", show=False, save=True,
@@ -156,7 +158,7 @@ class InferDens(SwitchMinimizer):
             else:
                 if not self.config_params.nothing_off: # if both on this is skipped
                     if rest_num == self.config_params.rest_num_max or self.prior_off:
-                        self.prior_off = not self.prior_off
+                        # self.prior_off = not self.prior_off
                         self.likelihood_off = not self.likelihood_off
                         rest_num = 0
                     if self.likelihood_off:
@@ -199,7 +201,6 @@ class InferDens(SwitchMinimizer):
 
             rest_num += 1 # INCREASE REST NUM ONE
 
-
             # saving information only at the end of a round of likelihood/prior off
             # getting 0th ionized/neutral index and saving to array
             # ionized_ind = self.ionized_indices[0]
@@ -211,13 +212,13 @@ class InferDens(SwitchMinimizer):
 
             # getting mse vals, final function val from optimizer, likelihood vals, posterior vals
             self.mse_vals = self.mse_vals.at[iter_num_big].set(self.check_threshold())
-            self.final_function_value_output = self.final_function_value_output.at[iter_num_big].set(self.final_func_val)
+            # self.final_function_value_output = self.final_function_value_output.at[iter_num_big].set(self.final_func_val)
 
             if self.config_params.save_prior_likelihood_arr:
-                prior, likelihood = self.calc_prior_likelihood(self.best_field_reshaped)
+                posterior, likelihood, prior = self.chi_sq_jax(self.best_field, debug=True)
                 self.prior_vals = self.prior_vals.at[iter_num_big].set(prior)
                 self.likelihood_vals = self.likelihood_vals.at[iter_num_big].set(likelihood)
-                self.posterior_vals = self.likelihood_vals.at[iter_num_big].set(prior + likelihood)
+                self.posterior_vals = self.posterior_vals.at[iter_num_big].set(posterior)
 
             # # save intermediate arrays of all important quantities
             np.save(self.plot_direc + f"/npy/prior_vals_{self.config_params.z}.npy", self.prior_vals)
@@ -226,7 +227,6 @@ class InferDens(SwitchMinimizer):
             np.save(self.plot_direc + f"/npy/optimizer_output_vals_{self.config_params.z}.npy", self.final_function_value_output)
             np.save(self.plot_direc + f"/npy/hessian_vals_{self.config_params.z}.npy", self.hessian_vals)
             np.save(self.plot_direc + f"/npy/mse_vals_{self.config_params.z}.npy", self.mse_vals)
-        # self.plot_all_optimizer_vals()
         np.save(self.plot_direc + f"/npy/best_field_{self.config_params.z}_FINAL.npy",
                 self.best_field_reshaped)
 
@@ -250,14 +250,15 @@ class InferDens(SwitchMinimizer):
         plt.savefig(self.plot_direc + f"/data_hist.png")
         plt.close()
 
-    def plot_mask(self):
-        self.masked_field = np.copy(self.best_field)
-        self.masked_field[self.neutral_indices_mask] = 0
-        reshaped_masked = jnp.reshape(self.masked_field, self.size)
+    def plot_mask(self, slice_idx=10):
+        plt.close()
+        self.masked_field = np.copy(self.best_field_reshaped)
+        self.masked_field[self.neutral_indices_mask_SHAPED] = 0
         if self.config_params.dim == 3:
-            reshaped_masked = reshaped_masked[1, :, :]
+            reshaped_masked = self.masked_field[slice_idx, :, :]
         plt.imshow(reshaped_masked)
-        plt.title("best field masked during optimization")
+        plt.colorbar()
+        plt.title("Inferred Ionized Pixel Values (all others masked)")
         plt.savefig(self.plot_direc + f"/mask.png")
 
     def plot_pixels(self):
@@ -281,7 +282,7 @@ class InferDens(SwitchMinimizer):
         plt.savefig("hessian.png", dpi=300)
 
     def plot_pspecs(self):
-        fig, axes_pspec = plt.subplots()
+        fig, (axes_pspec, axes_residual) = plt.subplots(2, 1, figsize=(8, 6), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
         self.num_k_modes = self.config_params.side_length
 
@@ -293,35 +294,38 @@ class InferDens(SwitchMinimizer):
             counts, pspec_truth, kvals = spherical_p_spec_normal(self.truth_field, self.config_params.num_bins, self.resolution, self.volume)
 
         self.best_field = jnp.reshape(self.best_field, (self.size))
-        counts, pspec_normal, kvals = spherical_p_spec_normal(self.best_field, self.config_params.num_bins,
-                                                              self.resolution, self.volume)
-        axes_pspec.loglog(kvals, self.truth_final_pspec, label=f"CAMB", alpha=0.5, color="purple")
-        axes_pspec.loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
-        axes_pspec.loglog(kvals, pspec_truth, label=f"Truth Field", alpha=0.5, color="red")
-        axes_pspec.legend()
-        # for i, k in enumerate([0, 1, 2]):
-        #     label = labels[k].replace("_", " ")
+        axes_pspec.loglog(kvals, pspec_truth, label=f"Truth Field", color="red", alpha=0.5)
+        axes_pspec.loglog(kvals, self.truth_final_pspec, label=f"Truth CMB Derived", alpha=0.5, color="purple", ls="--")
 
-        #     if self.config_params.dim == 2:
-        #         counts, pspec_normal, kvals = circular_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.area)
-        #         counts, pspec_pre, kvals = after_circular_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.area)
-        #         poisson_rms = np.sqrt(np.abs(pspec_pre - pspec_normal)) / np.sqrt(counts)
-        #         axes_pspec.loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
-        #
-        #     elif self.config_params.dim == 3:
-        #         print("shape best field")
-        #
-        #     # counts, pspec_pre, kvals = self.p_spec_pre(best_field, self.num_bins)
-        #     # poisson_rms = np.sqrt(np.abs(pspec_normal - pspec_pre)) / np.sqrt(counts)
-        #     # print(poisson_rms)
-        #     # axes_pspec.errorbar(kvals, pspec_normal, yerr=poisson_rms, label=f"Iteration # {k} with {title}", ls="--", alpha=0.3)
-        #     if k == 3:
-        #         axes_pspec.loglog(kvals, pspec_normal,
-        #                       label=f"Best Field", alpha=0.5)
-        #     else:
-        #         axes_pspec.loglog(kvals, pspec_normal,
-        #                              label=f"Iteration # {k} with {label}", alpha=0.5)
-        #         # axes_pspec.errorbar(kvals, pspec_normal, yerr=poisson_rms, alpha=0.3, color="blue")
+        if self.config_params.dim == 2:
+            counts, pspec_normal, kvals = circular_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.area)
+            counts, pspec_pre, kvals = after_circular_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.area)
+        elif self.config_params.dim == 3:
+            counts, pspec_normal, kvals = spherical_p_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.volume)
+            counts, pspec_pre, kvals = after_spherical_p_spec_normal(self.best_field, self.config_params.num_bins, self.resolution, self.volume)
+
+        # Calculate the upper and lower bounds for the shaded region
+        poisson_rms = np.sqrt(np.abs(pspec_pre - pspec_normal)) / np.sqrt(counts)
+        upper_bound = pspec_normal + poisson_rms
+        lower_bound = pspec_normal - poisson_rms
+
+        # Plot the nominal values and the shaded region
+        axes_pspec.fill_between(kvals, lower_bound, upper_bound, alpha=0.3, color="red")
+        axes_pspec.loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
+        axes_pspec.legend()
+        difference = np.sqrt((pspec_normal - pspec_truth)**2)
+        print("pspec differences")
+        print(difference)
+        # Residual plot
+        # frame2 = fig1.add_axes((.1, .1, .8, .2))
+        axes_residual.loglog(kvals, difference, color="black", alpha=1)
+        axes_residual.set_xlabel(r"$\rm \mathbf{k}~[Mpc^{-3}]$")
+        axes_pspec.set_ylabel(r"$\rm P_{mm}~[Mpc^3]$")
+        axes_residual.set_ylabel(r"$\rm P_{best} - P_{truth}~[Mpc^3]$")
+        axes_pspec.set_xticklabels([])  # Remove x-tic labels for the first frame
+
+        plt.subplots_adjust(hspace=0)
+        plt.tight_layout()
         fig.savefig(self.plot_direc + "/plots/power_spectra.png", dpi=300)
 
 
@@ -462,36 +466,36 @@ class InferDens(SwitchMinimizer):
         t.set_bbox(dict(facecolor='white', alpha=1, edgecolor='white'))
 
 
-    def calc_prior_likelihood(self, field):
-        field = jnp.reshape(field, self.size)
-        if self.config_params.dim == 3:
-            assert np.shape(field) == (self.side_length, self.side_length, self.side_length)
-        elif self.config_params.dim == 2:
-            assert np.shape(field) == (self.side_length, self.side_length)
-        else:
-            exit()
-        # note param_init was passed in and is a constant
-        discrepancy = self.data - self.bias_field(field)
-        likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
-        #### prior
-        if self.new_prior:
-            counts, power_curr, bin_means = circular_spec_normal(field, self.config_params.num_bins, self.resolution, self.area)
-            if self.config_params.dim == 2:
-                counts, power_curr, bin_means = circular_spec_normal(field, self.config_params.num_bins, self.resolution, self.area)
-            elif self.config_params.dim == 3:
-                counts, power_curr, bin_means = spherical_p_spec_normal(field, self.config_params.num_bins, self.resolution, self.volume)
-            # sigma = counts ** 2
-            mask_high_k = bin_means < 5
-            x = (self.pspec_box - power_curr).flatten()
-            prior = np.sum(x[mask_high_k]**2)
-        elif self.original_prior:
-            # FT and get only the independent modes
-            fourier_box = self.fft_jax(field)
-            fourier_nums_real, fourier_nums_imag = self.independent_only_jax(fourier_box)
-            real_prior = jnp.dot(fourier_nums_real ** 2, (2 / self.pspec_indep_nums_re))  # Half variance for real
-            imag_prior = jnp.dot(fourier_nums_imag ** 2, (2 / self.pspec_indep_nums_im))  # Half variance for imag
-            prior = real_prior + imag_prior
-        return prior, likelihood
+    # def calc_prior_likelihood(self, field):
+    #     field = jnp.reshape(field, self.size)
+    #     if self.config_params.dim == 3:
+    #         assert np.shape(field) == (self.side_length, self.side_length, self.side_length)
+    #     elif self.config_params.dim == 2:
+    #         assert np.shape(field) == (self.side_length, self.side_length)
+    #     else:
+    #         exit()
+    #     # note param_init was passed in and is a constant
+    #     discrepancy = self.data - self.bias_field(field)
+    #     likelihood = jnp.dot(discrepancy.flatten() ** 2, 1. / self.N_diag)
+    #     #### prior
+    #     if self.new_prior:
+    #         counts, power_curr, bin_means = circular_spec_normal(field, self.config_params.num_bins, self.resolution, self.area)
+    #         if self.config_params.dim == 2:
+    #             counts, power_curr, bin_means = circular_spec_normal(field, self.config_params.num_bins, self.resolution, self.area)
+    #         elif self.config_params.dim == 3:
+    #             counts, power_curr, bin_means = spherical_p_spec_normal(field, self.config_params.num_bins, self.resolution, self.volume)
+    #         # sigma = counts ** 2
+    #         mask_high_k = bin_means < 5
+    #         x = (self.pspec_box - power_curr).flatten()
+    #         prior = np.sum(x[mask_high_k]**2)
+    #     elif self.original_prior:
+    #         # FT and get only the independent modes
+    #         fourier_box = self.fft_jax(field)
+    #         fourier_nums_real, fourier_nums_imag = self.independent_only_jax(fourier_box)
+    #         real_prior = jnp.dot(fourier_nums_real ** 2, (2 / self.pspec_indep_nums_re))  # Half variance for real
+    #         imag_prior = jnp.dot(fourier_nums_imag ** 2, (2 / self.pspec_indep_nums_im))  # Half variance for imag
+    #         prior = real_prior + imag_prior
+    #     return prior, likelihood
 
     def plot_all_optimizer_vals(self):
         """
@@ -505,22 +509,23 @@ class InferDens(SwitchMinimizer):
         posterior_arr = np.load(self.plot_direc + f"/npy/posterior_vals_{self.config_params.z}.npy")
         final_function_value_output = np.load(self.plot_direc + f"/npy/optimizer_output_vals_{self.config_params.z}.npy")
         labels = np.load(self.plot_direc + f"/npy/labels.npy")
+        print("labels", labels)
         fig_mse, ax_mse = plt.subplots()
-        ax_mse.semilogy(mse_vals, label="Mean square error", ls=None)
-        ax_mse.semilogy(prior_arr, label="Prior", ls="--")
-        ax_mse.semilogy(like_arr, label="Likelihood", ls="--")
-        ax_mse.semilogy(posterior_arr, label="Posterior")
-        ax_mse.semilogy(final_function_value_output, label="Output from minimizer", ls="--")
+        # ax_mse.semilogy(mse_vals, label="Mean square error", ls=None)
+        ax_mse.semilogy(prior_arr, label="Prior", ls=None, marker="o")
+        ax_mse.semilogy(like_arr, label="Likelihood", ls=None, marker="o")
+        ax_mse.semilogy(posterior_arr, label="Posterior", ls=None, marker="o")
+        # ax_mse.semilogy(final_function_value_output, label="Output from minimizer", ls="--")
 
-        for iter_num_big in range(self.config_params.iter_num_max):
-            if labels[iter_num_big] == "prior_off" and iter_num_big == 0:
-                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="*", c="black", label="likelihood only, mask off")
-            elif labels[iter_num_big] == "likelihood_off" and iter_num_big == 1:
-                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="o", c="black", label="prior only, mask on")
-            elif labels[iter_num_big] == "prior_off":
-                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="*", c="black")
-            elif labels[iter_num_big] == "likelihood_off":
-                plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="o", c="black")
+        # for iter_num_big in range(self.config_params.iter_num_max):
+        #     if labels[iter_num_big] == "prior_off" and iter_num_big == 0:
+        #         plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="*", c="black", label="likelihood only, mask off")
+        #     elif labels[iter_num_big] == "likelihood_off" and iter_num_big == 1:
+        #         plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="o", c="black", label="prior only, mask on")
+        #     elif labels[iter_num_big] == "prior_off":
+        #         plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="*", c="black")
+        #     elif labels[iter_num_big] == "likelihood_off":
+        #         plt.semilogy(iter_num_big, mse_vals[iter_num_big], marker="o", c="black")
         ax_mse.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax_mse.set_xlabel("Iteration")
         ax_mse.legend()
@@ -553,7 +558,17 @@ class InferDens(SwitchMinimizer):
         ax_mse.legend()
         fig_mse.savefig(f"compare_mse_post_{self.config_params.z}.png")
 
-    def plot_5_panel(self):
+    def plot_5_panel(self, slice_idx=10):
+        print("self.size[-1]")
+        print(self.size[-1])
+        cube_height = self.size[-1]
+        if cube_height < 20:
+            for i in range(cube_height):
+                self.plot_5_panel_slice(slice_idx=i)
+        else:
+            self.plot_5_panel_slice(slice_idx=slice_idx)
+
+    def plot_5_panel_slice(self, slice_idx):
         """This method gives a nice five panel plot showing the data, starting field, predicted field, truth field, residual"""
 
         assert np.shape(self.truth_field) == np.shape(self.data)
@@ -571,7 +586,6 @@ class InferDens(SwitchMinimizer):
 
         # Check if fields are 3D or 2D
         if self.data.ndim == 3:
-            slice_idx = 10  # You can change this to the desired slice
             data_slice = self.data[slice_idx, :, :]
             best_field_slice = self.best_field_reshaped[slice_idx, :, :]
             truth_field_slice = self.truth_field[slice_idx, :, :]
@@ -612,7 +626,7 @@ class InferDens(SwitchMinimizer):
         ax4.set_xlabel("Pixel #")
 
         # Plotting Starting field (truth-best)
-        im5 = ax5.imshow(jnp.reshape(self.s_field, (self.size))[slice_idx, :, :]) #, norm=norm_shared_residual)
+        im5 = ax5.imshow(jnp.reshape(self.s_field_original, (self.size))[slice_idx, :, :]) #, norm=norm_shared_residual)
         ax5.set_title("Starting Field") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
         ax5.set_xlabel("Pixel #")
 
@@ -629,9 +643,9 @@ class InferDens(SwitchMinimizer):
         fig.tight_layout()
         ## getting plot title
         if self.config_params.noise_off:
-            fig.savefig(f"{self.plot_direc}/plots/5_panel_z_{self.config_params.z}_no_noise_.png", dpi=300)
+            fig.savefig(f"{self.plot_direc}/plots/slice_{slice_idx}_5_panel_z_{self.config_params.z}_no_noise_.png", dpi=300)
         else:
-            fig.savefig(f"{self.plot_direc}/plots/5_panel_z_{self.config_params.z}_w_noise.png", dpi=300)
+            fig.savefig(f"{self.plot_direc}/plots/slice_{slice_idx}_5_panel_z_{self.config_params.z}_w_noise.png", dpi=300)
         print("Saving three panel plot...")
 
         plt.close()
@@ -787,6 +801,7 @@ class InferDens(SwitchMinimizer):
         plt.plot(self.truth_field.flatten(), self.truth_field.flatten(), label="Truth Field", color="black")
         plt.xlabel("Truth")
         plt.ylabel("Best Field")
+        # plt.yscale('symlog')
 
         plt.legend()
         plt.savefig(f"{self.plot_direc}/plots/reconstructed_vs_truth.png")
@@ -815,10 +830,10 @@ class InferDens(SwitchMinimizer):
 class ConfigParam:
     def __init__(self, ska_effects, free_params, z, truth_field, brightness_temperature_field, num_bins, nothing_off, plot_direc, side_length, physical_side_length,
                  dimensions=2, iter_num_max=10, rest_num_max=3, noise_off=False,
-                 save_posterior_values=False, run_optimizer=False, mse_plot_on=False,
+                 run_optimizer=False, mse_plot_on=False,
                  weighted_prior=None, new_prior=False, old_prior=False, verbose=False,
                  debug=False, use_truth_mm=False, save_prior_likelihood_arr=False, seed=1010,
-                 create_instance=False):
+                 create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False):
         """
         :param free_params - dictionary with free parameters to use
         :param z - the redshift you would like to create your density field at
@@ -838,6 +853,8 @@ class ConfigParam:
         :param verbose (Default: False) - whether or not to print a bunch of stuff
         :param plot_direc (Default: 2D_plots) - where to save plots
         :param autorun (Default: True) - run an immediate gradient descent
+        :param use_matter_pspec_starting_field (Default: False) - start field with a power spectrum matching truth from CAMB
+        :param normalize_everything - normalize the entire field
         """
         self.ska_effects = ska_effects
         self.free_params = free_params
@@ -853,7 +870,6 @@ class ConfigParam:
         self.iter_num_max = iter_num_max
         self.rest_num_max = rest_num_max
         self.noise_off = noise_off
-        self.save_posterior_values = save_posterior_values
         self.run_optimizer = run_optimizer
         self.mse_plot_on = mse_plot_on
         self.weighted_prior = weighted_prior
@@ -865,7 +881,14 @@ class ConfigParam:
         self.save_prior_likelihood_arr = save_prior_likelihood_arr
         self.seed = seed
         self.create_instance = create_instance
+        self.use_matter_pspec_starting_field = use_matter_pspec_starting_field
+        self.normalize_everything = normalize_everything
         assert(self.new_prior != self.old_prior)
+
+    def save_to_file(self, directory, filename="config_run.txt"):
+        with open(directory + "/" + filename, "w") as file:
+            for key, value in self.__dict__.items():
+                file.write(f"{key}: {value}\n")
 
 # Print the result to verify
 print(f'SKA Effects Enabled: {ska_effects}')
@@ -874,15 +897,15 @@ k_0_fiducial = 0.185 * 0.676 # changing from Mpc/h to Mpc
 alpha_fiducial = 0.564
 b_0_fiducial = 0.593
 midpoint_z_fiducial = 7
-tan_fiducial = 1
+tan_fiducial = 2
 
-static_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tan_slope": tan_fiducial,
+static_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tanh_slope": tan_fiducial,
                    "avg_z": midpoint_z_fiducial}  # b_0=0.5, alpha=0.2, k_0=0.1)
 
 def grid_test(free_param_name, free_param_arr, static_redshift=True,
               ska_effects=False,
-              nominal=False, side_length=128, physical_side_length=128, bins=64, brightness_temperature_field=None,
-              truth_field=None, iter_num_max=3, rest_num_max=3, nothing_off=True):
+              nominal=False, side_length=16, physical_side_length=16, bins=8, brightness_temperature_field=None,
+              truth_field=None, iter_num_max=3, rest_num_max=2, nothing_off=False):
     import GPUtil
     import gc
     fiducial_params = static_params.copy()
@@ -890,13 +913,13 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
     if nominal:
         z = fiducial_params["redshift_run"]
 
-        params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=truth_field,  brightness_temperature_field=brightness_temperature_field, num_bins=bins,
-                             nothing_off=nothing_off, plot_direc="", side_length=side_length, physical_side_length=physical_side_length,
-                             dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
-                             save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                             weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                             debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                             create_instance=False)
+        # params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=truth_field,  brightness_temperature_field=brightness_temperature_field, num_bins=bins,
+        #                      nothing_off=nothing_off, plot_direc="", side_length=side_length, physical_side_length=physical_side_length,
+        #                      dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
+        #                      run_optimizer=True, mse_plot_on=False,
+        #                      weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
+        #                      debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
+        #                      create_instance=False)
 
     else:
         for free_param in free_param_arr:
@@ -908,18 +931,20 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
             else:
                 free_param = np.round(free_param, decimals=4)
                 if static_redshift:
-
                     fiducial_params[free_param_name] = free_param # update fiducial param list with varying parameter
                     z = fiducial_params["redshift_run"]
                 else: # varying redshift
                     z = free_param
-            params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=truth_field,  brightness_temperature_field=brightness_temperature_field, num_bins=bins,
-                                 nothing_off=nothing_off, plot_direc="", side_length=side_length, physical_side_length=physical_side_length,
-                                 dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
-                                 save_posterior_values=False, run_optimizer=True, mse_plot_on=False,
-                                 weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
-                                 debug=False, use_truth_mm=True, save_prior_likelihood_arr=False, seed=1,
-                                 create_instance=False)
+    params = ConfigParam(ska_effects=ska_effects, free_params=fiducial_params, z=z, truth_field=truth_field,
+                         brightness_temperature_field=brightness_temperature_field, num_bins=bins,
+                         nothing_off=nothing_off, plot_direc="", side_length=side_length,
+                         physical_side_length=physical_side_length,
+                         dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
+                         run_optimizer=True, mse_plot_on=False,
+                         weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
+                         debug=False, use_truth_mm=False, save_prior_likelihood_arr=True, seed=1,
+                         create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False)
+
 
     # DO FOR BOTH
     samp = InferDens(params, s_field=None) # setting s-field to none for first iteration
@@ -927,22 +952,27 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
     samp.plot_5_panel()
     samp.plot_3_panel()
     samp.plot_mask()
-    samp.plot_mask()
     samp.plot_pspecs()
+    samp.plot_all_optimizer_vals()
     gc.collect()
 
 
 
 if __name__ == "__main__":
     run_optimizer = True
-    for z in [12, 11, 10, 9, 8, 7, 6]:
+    for z in [11]:
         static_params["redshift_run"] = z
         # truth_field = np.load(f"21cmfast_fields_1Mpcpp/density_{z}.npy")
         # brightness_temperature_field = np.load(f"21cmfast_fields_1Mpcpp/brightness_temp_{z}.npy")
 
         grid_test("none", [None], static_redshift=True, ska_effects=False, nominal=True,
-                  bins=32, side_length=128, physical_side_length=128, iter_num_max=1, rest_num_max=3,
-                  truth_field=[], brightness_temperature_field=[], nothing_off=False)
+                  bins=32,
+                  side_length=128,
+                  physical_side_length=128,
+                  iter_num_max=2,
+                  rest_num_max=1,
+                  nothing_off=False,
+                  truth_field=[], brightness_temperature_field=[])
         exit()
         # Define parameter ranges
     alpha_values = np.linspace(0.1, 2, 10)
@@ -963,7 +993,7 @@ if __name__ == "__main__":
     # num_combinations = alpha_values.size
     # Iterate over each combination of parameters
     
-    for z in [6.5, 7, 8, 9, 10]:
+    for z in [11]:
         for i in range(len(alpha_values)):
             static_params["redshift_run"] = z
             alpha = alpha_values[i]
