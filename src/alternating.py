@@ -104,7 +104,7 @@ class InferDens(SwitchMinimizer):
 
     def check_threshold(self):
         start_time = time.time()
-        batt_model_instance = Dens2bBatt(self.best_field_reshaped, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params)
+        batt_model_instance = Dens2bBatt(self.best_field_reshaped, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
         temp_model_brightness = batt_model_instance.temp_brightness
         print("battaglia run took")
         print(time.time() - start_time)
@@ -129,7 +129,7 @@ class InferDens(SwitchMinimizer):
                     self.mask_ionized = False
                 else:
                     # first iteration, we keep just the likelihood on
-                    self.prior_off = False
+                    self.prior_off = True
                     self.likelihood_off = False
                     self.mask_ionized = False
                 ####
@@ -158,7 +158,7 @@ class InferDens(SwitchMinimizer):
             else:
                 if not self.config_params.nothing_off: # if both on this is skipped
                     if rest_num == self.config_params.rest_num_max or self.prior_off:
-                        # self.prior_off = not self.prior_off
+                        self.prior_off = not self.prior_off
                         self.likelihood_off = not self.likelihood_off
                         rest_num = 0
                     if self.likelihood_off:
@@ -282,6 +282,7 @@ class InferDens(SwitchMinimizer):
         plt.savefig("hessian.png", dpi=300)
 
     def plot_pspecs(self):
+        plt.close()
         fig, (axes_pspec, axes_residual) = plt.subplots(2, 1, figsize=(8, 6), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
         self.num_k_modes = self.config_params.side_length
@@ -512,9 +513,9 @@ class InferDens(SwitchMinimizer):
         print("labels", labels)
         fig_mse, ax_mse = plt.subplots()
         # ax_mse.semilogy(mse_vals, label="Mean square error", ls=None)
-        ax_mse.semilogy(prior_arr, label="Prior", ls=None, marker="o")
-        ax_mse.semilogy(like_arr, label="Likelihood", ls=None, marker="o")
-        ax_mse.semilogy(posterior_arr, label="Posterior", ls=None, marker="o")
+        ax_mse.semilogy(prior_arr, label="Prior", ls="", marker="o", alpha=0.4)
+        ax_mse.semilogy(like_arr, label="Likelihood", ls="", marker="o", alpha=0.4)
+        ax_mse.semilogy(posterior_arr, label="Posterior", ls="", marker="o", alpha=0.4)
         # ax_mse.semilogy(final_function_value_output, label="Output from minimizer", ls="--")
 
         # for iter_num_big in range(self.config_params.iter_num_max):
@@ -567,8 +568,10 @@ class InferDens(SwitchMinimizer):
                 self.plot_5_panel_slice(slice_idx=i)
         else:
             self.plot_5_panel_slice(slice_idx=slice_idx)
+            self.plot_5_panel_slice(slice_idx=slice_idx, shared_axis=True)
 
-    def plot_5_panel_slice(self, slice_idx):
+
+    def plot_5_panel_slice(self, slice_idx, shared_axis=False):
         """This method gives a nice five panel plot showing the data, starting field, predicted field, truth field, residual"""
 
         assert np.shape(self.truth_field) == np.shape(self.data)
@@ -576,13 +579,13 @@ class InferDens(SwitchMinimizer):
 
         residual = self.truth_field - self.best_field_reshaped
 
-        # norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
-        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+        norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+                                       vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
 
         norm_shared_residual = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=np.min(residual),
                                        vmax=np.max(residual))
 
-        fig, (ax1, ax5, ax2, ax3, ax4) = plt.subplots(1, 5, figsize=(20, 5))
+        fig, (ax1, ax6, ax5, ax2, ax3, ax4) = plt.subplots(1, 6, figsize=(20, 5))
 
         # Check if fields are 3D or 2D
         if self.data.ndim == 3:
@@ -611,12 +614,20 @@ class InferDens(SwitchMinimizer):
 
 
         # Plotting Inferred density
-        im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
+        if shared_axis:
+            im2 = ax2.imshow(best_field_slice, norm=norm_shared)
+        else:
+            im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
+
         ax2.set_title(f"Inferred Density") #(skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
         ax2.set_xlabel("Pixel #")
 
         # Plotting Truth
-        im3 = ax3.imshow(truth_field_slice) #, norm=norm_shared)
+        if shared_axis:
+            im3 = ax3.imshow(truth_field_slice, norm=norm_shared)
+        else:
+            im3 = ax3.imshow(truth_field_slice)
+
         ax3.set_title(f"Truth") #(skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
         ax3.set_xlabel("Pixel #")
 
@@ -630,6 +641,13 @@ class InferDens(SwitchMinimizer):
         ax5.set_title("Starting Field") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
         ax5.set_xlabel("Pixel #")
 
+        # Plotting Starting field (truth-best)
+        best_data_slice_inferred = Dens2bBatt(self.best_field_reshaped, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
+
+        im6 = ax6.imshow(best_data_slice_inferred.temp_brightness[slice_idx, :, :])  # , norm=norm_shared_residual)
+        ax6.set_title("Inferred Data")  # + (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
+        ax6.set_xlabel("Pixel #")
+
         # Create individual colorbars
         # Adding colorbars with consistent formatting
         cbar1 = fig.colorbar(im1, ax=ax1, orientation='vertical', fraction=0.046, pad=0.04)
@@ -637,16 +655,23 @@ class InferDens(SwitchMinimizer):
         cbar3 = fig.colorbar(im3, ax=ax3, orientation='vertical', fraction=0.046, pad=0.04)
         cbar4 = fig.colorbar(im4, ax=ax4, orientation='vertical', fraction=0.046, pad=0.04)
         cbar5 = fig.colorbar(im5, ax=ax5, orientation='vertical', fraction=0.046, pad=0.04)
+        cbar6 = fig.colorbar(im6, ax=ax6, orientation='vertical', fraction=0.046, pad=0.04)
 
         # Adjust layout to avoid overlap
         fig.subplots_adjust(wspace=0.3)  # Adjust space between subplots
         fig.tight_layout()
         ## getting plot title
         if self.config_params.noise_off:
-            fig.savefig(f"{self.plot_direc}/plots/slice_{slice_idx}_5_panel_z_{self.config_params.z}_no_noise_.png", dpi=300)
+            save_plot_title = f"3_panel_z_{self.config_params.z}_no_noise_.png"
         else:
-            fig.savefig(f"{self.plot_direc}/plots/slice_{slice_idx}_5_panel_z_{self.config_params.z}_w_noise.png", dpi=300)
-        print("Saving three panel plot...")
+            save_plot_title = f"3_panel_z_{self.config_params.z}_w_noise_.png"
+
+        if shared_axis:
+            save_plot_title = f"shared_axis_{save_plot_title}"
+
+        fig.savefig(f"{self.plot_direc}/plots/{save_plot_title}", dpi=300)
+
+        print("Saving five panel plot...")
 
         plt.close()
 
@@ -730,9 +755,13 @@ class InferDens(SwitchMinimizer):
 
         ## getting plot title
         if self.config_params.noise_off:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.config_params.z}_no_noise_.png", dpi=300)
+            save_plot_title = f"3_panel_z_{self.config_params.z}_no_noise_.png"
         else:
-            fig.savefig(f"{self.plot_direc}/plots/3_panel_z_{self.config_params.z}_w_noise.png", dpi=300)
+            save_plot_title = f"3_panel_z_{self.config_params.z}_w_noise_.png"
+
+
+        fig.savefig(f"{self.plot_direc}/plots/{save_plot_title}", dpi=300)
+
         print("Saving three panel plot...")
 
         plt.close()
@@ -818,13 +847,13 @@ class InferDens(SwitchMinimizer):
     def make_ionisation_level_residual_plot(self):
         plt.close()
         residual = self.truth_field.flatten() - self.best_field.flatten()
-        batt_model_instance = Dens2bBatt(self.truth_field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params)
+        batt_model_instance = Dens2bBatt(self.truth_field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
 
-        x_HII = 1- batt_model_instance.X_HI
-        plt.scatter(x_HII, residual)
-        plt.ylabel("residual")
+        x_HII = 1 - batt_model_instance.X_HI
+        plt.scatter(x_HII, residual, color="black", s= 8)
+        plt.ylabel("Residual (truth - inferred)")
         plt.xlabel("X_HII")
-        plt.savefig(f"{self.plot_direc}/plots/residual_adelie.png")
+        plt.savefig(f"{self.plot_direc}/plots/residual_by_frac.png")
 
 
 class ConfigParam:
@@ -960,18 +989,18 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
 
 if __name__ == "__main__":
     run_optimizer = True
-    for z in [11]:
+    for z in [12]:
         static_params["redshift_run"] = z
         # truth_field = np.load(f"21cmfast_fields_1Mpcpp/density_{z}.npy")
         # brightness_temperature_field = np.load(f"21cmfast_fields_1Mpcpp/brightness_temp_{z}.npy")
 
-        grid_test("none", [None], static_redshift=True, ska_effects=False, nominal=True,
+        grid_test("none", [None], static_redshift=True, ska_effects=True, nominal=True,
                   bins=32,
                   side_length=128,
                   physical_side_length=128,
-                  iter_num_max=2,
+                  iter_num_max=6,
                   rest_num_max=1,
-                  nothing_off=False,
+                  nothing_off=True,
                   truth_field=[], brightness_temperature_field=[])
         exit()
         # Define parameter ranges

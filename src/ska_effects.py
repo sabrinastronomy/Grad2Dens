@@ -42,9 +42,10 @@ class SKAEffects:
         # jax.debug.print("pre wedge brightness temp: {}", np.max(self.brightness_temp))
         # self.wedge()
         # jax.debug.print("pre convolution brightness temp: {}", np.max(self.brightness_temp))
+        self.thermal_noise()
+
         self.beam_convolution()
         # jax.debug.print("pre thermal noise brightness temp: {}", np.max(self.brightness_temp))
-        self.thermal_noise()
         # jax.debug.print("post thermal noise brightness temp: {}", np.max(self.brightness_temp))
 
     def convolve_own(self, field_1, kernel):
@@ -65,7 +66,7 @@ class SKAEffects:
         # Take the real part of the result (in case of small imaginary parts due to numerical errors)
         return np.real(result)
 
-    def beam_convolution(self, wavelength=21e-2, b_max=65e3):
+    def beam_convolution(self, wavelength=21e-2, b_max=65e3, plot=False):
         """
         Beam effects (convolving with (12) from Gorce+2021) applied to field
         Default parameters are for SKA-low
@@ -103,46 +104,48 @@ class SKAEffects:
         X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
 
         # Compute the Gaussian field
-        # gaussian_kernel = np.exp((-1/(2*std_dev**2)) * ((X - mean[0]) ** 2 + (Y - mean[1]) ** 2 + (Z - mean[2]) ** 2)) / (np.sqrt(2 * np.pi * std_dev ** 2))**3
-        gaussian_kernel = np.zeros_like(self.brightness_temp)
-        gaussian_kernel = gaussian_kernel.at[pixel_length // 2, pixel_length // 2, pixel_length // 2].set(1)
+        gaussian_kernel = np.exp((-1/(2*std_dev**2)) * ((X - mean[0]) ** 2 + (Y - mean[1]) ** 2 + (Z - mean[2]) ** 2)) / (np.sqrt(2 * np.pi * std_dev ** 2))**3
+        # gaussian_kernel = np.zeros_like(self.brightness_temp)
+        # gaussian_kernel = gaussian_kernel.at[pixel_length // 2, pixel_length // 2, pixel_length // 2].set(1)
         # gaussian_kernel /= np.sum(gaussian_kernel) # normalize
 
-        cmap = plt.cm.viridis  # Choose a colormap
-        slice = gaussian_kernel[:, 64, :]
-        # print("min and max")
-        # print(np.sum(gaussian_kernel))
-        # print(np.min(slice))
-        # print(np.max(slice))
-        # # exit()
-        # plt.imshow(slice, cmap=cmap)
-        # plt.colorbar()
-        # plt.savefig("debug_ska/gauss_kernel_new.png")
-        # plt.close()
+
 
         self.brightness_temp = self.convolve_own(self.brightness_temp, gaussian_kernel)
+        if plot:
+            cmap = plt.cm.viridis  # Choose a colormap
+            slice = gaussian_kernel[:, 64, :]
+            # print("min and max")
+            # print(np.sum(gaussian_kernel))
+            # print(np.min(slice))
+            # print(np.max(slice))
+            # exit()
+            plt.imshow(slice, cmap=cmap)
+            plt.colorbar()
+            plt.savefig("debug_ska/gauss_kernel_new.png")
+            plt.close()
 
-        # fig, axs = plt.subplots(1, 2, figsize=(15, 5), constrained_layout=True)
-        # min_bright_temp = np.min(self.brightness_temp)
-        # max_bright_temp = np.max(self.brightness_temp)
-        # 
-        # im0 = axs[0].imshow(self.brightness_temp_original[0, :, :], origin='lower', cmap='viridis', #vmin=min_bright_temp, vmax=max_bright_temp)
-        #                     vmin=np.min(self.brightness_temp_original[0, :, :]), vmax=np.max(self.brightness_temp_original[0, :, :]))
-        # axs[0].set_xlabel('Pre-Beam Convolution')
-        # 
-        # im1 = axs[1].imshow(self.brightness_temp[0, :, :], origin='lower', cmap='viridis', vmin=min_bright_temp, vmax=max_bright_temp)
-        # axs[1].set_xlabel('Post SKA1-Low Beam Convolution')
+            fig, axs = plt.subplots(1, 2, figsize=(15, 5), constrained_layout=True)
+            min_bright_temp = np.min(self.brightness_temp)
+            max_bright_temp = np.max(self.brightness_temp)
 
-        # Add colorbars to each plot
-        # fig.colorbar(im0, ax=axs[0], orientation='vertical', label=r'$\rm T_b~[mK]$')
-        # fig.colorbar(im1, ax=axs[1], orientation='vertical', label=r'$\rm T_b~[mK]$')
-        # 
-        # for ax in axs:
-        #     ax.set_xticks([])
-        #     ax.set_yticks([])
-        # 
-        # fig.savefig(f"debug_ska/beam_convolution.png", dpi=300)
-        # plt.close(fig)
+            im0 = axs[0].imshow(self.brightness_temp_original[0, :, :], origin='lower', cmap='viridis', #vmin=min_bright_temp, vmax=max_bright_temp)
+                                vmin=np.min(self.brightness_temp_original[0, :, :]), vmax=np.max(self.brightness_temp_original[0, :, :]))
+            axs[0].set_xlabel('Pre-Beam Convolution')
+
+            im1 = axs[1].imshow(self.brightness_temp[0, :, :], origin='lower', cmap='viridis', vmin=min_bright_temp, vmax=max_bright_temp)
+            axs[1].set_xlabel('Post SKA1-Low Beam Convolution')
+
+            #Add colorbars to each plot
+            fig.colorbar(im0, ax=axs[0], orientation='vertical', label=r'$\rm T_b~[mK]$')
+            fig.colorbar(im1, ax=axs[1], orientation='vertical', label=r'$\rm T_b~[mK]$')
+
+            for ax in axs:
+                ax.set_xticks([])
+                ax.set_yticks([])
+
+            fig.savefig(f"debug_ska/beam_convolution.png", dpi=300)
+            plt.close(fig)
 
     def thermal_noise(self, t_int=1000, area_tot=1e5, delta_theta=10):
         """
@@ -153,6 +156,7 @@ class SKAEffects:
         Delta_nu = simulation frequency resolution (TODO)
         t_int = 1000 hours (TODO)
         """
+        print("Adding thermal noise")
         # print("resolution", self.resolution)
         # Parameters
         mpc = 3.086e+22  # m
@@ -168,12 +172,12 @@ class SKAEffects:
         self.sigma_th = (2.9 * ((1 + self.redshift) / 10) ** 4.6 * np.sqrt(
             (1e6 / obs_freq_width) * (100 / t_int)))  # Equation (13) in Gorce+2021
         # TODO add delta theta: convert to arcmin from rad
-        # jax.debug.print("var_th : {}", np.max(self.sigma_th))
+        jax.debug.print("var_th : {}", np.max(self.sigma_th))
 
         key = jax.random.PRNGKey(0)  # Create a random key
         thermal_noise = self.sigma_th * jax.random.normal(key, np.shape(
             self.brightness_temp))  # Generate a 3x3 array of random normal numbers
-        # jax.debug.print("thermal_noise : {}", np.max(thermal_noise))
+        jax.debug.print("thermal_noise : {}", np.max(thermal_noise))
 
         self.brightness_temp += thermal_noise
         # fig, axs = plt.subplots(1, 2, figsize=(15, 5), constrained_layout=True)
@@ -296,8 +300,8 @@ if __name__ == "__main__":
     midpoint_z_fiducial = 7
     tanh_fiducial = 1
 
-    physical_side_length = 510
-    pixel_side_length = 255
+    physical_side_length = 256
+    pixel_side_length = 128
     z = 6.5
     pb = pbox.PowerBox(
         N=pixel_side_length,  # number of wavenumbers
@@ -316,8 +320,8 @@ if __name__ == "__main__":
     plt.savefig("debug_ska/density.png")
     plt.close()
 
-    batt_model_instance = Dens2bBatt(pb.delta_x(), delta_pos=1, set_z=z, flow=True,
-                                     free_params=fiducial_params, resolution=1,
+    batt_model_instance = Dens2bBatt(pb.delta_x(), z, physical_side_length, physical_side_length/pixel_side_length, flow=True,
+                                     free_params=fiducial_params,
                                      apply_ska=False, debug=True)
 
     plt.imshow(batt_model_instance.temp_brightness[:, :, 0])
@@ -331,6 +335,6 @@ if __name__ == "__main__":
     # debug = SKAEffects(batt_model_instance.temp_brightness,False, z,physical_side_length=physical_side_length)
     # debug.beam_convolution()
     debug = SKAEffects(batt_model_instance.temp_brightness, False, z, physical_side_length=128)
-    debug.thermal_noise()
+    debug.beam_convolution(plot=True)
 
 

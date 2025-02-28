@@ -187,12 +187,12 @@ class SwitchMinimizer:
         # self.rms_Tb = jnp.std(self.data)
         if self.config_params.ska_effects:
             self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
-        else:
-            self.rms_Tb = jnp.std(self.data)
-            self.rms_Tb = 1
+        # else:
+        self.rms_Tb = jnp.std(self.data)
+        self.rms_Tb = 1
 
-            # self.generate_data_cov()
-            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+        # self.generate_data_cov()
+        self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
             # self.N_diag = self.data_cov
         # print("N_diagonal")
         # id_print(self.N_diag)
@@ -224,7 +224,7 @@ class SwitchMinimizer:
                 truth_field_flattened = jnp.asarray(self.truth_field.flatten())
                 # self.s_field = self.s_field_original = truth_field_flattened + 1
 
-                # self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
+                self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
 
         if self.config_params.normalize_everything:
             self.truth_field = self.normalize(self.truth_field)
@@ -384,6 +384,10 @@ class SwitchMinimizer:
         else:
             pspec_difference = (self.p_spec_truth_realization - power_curr).flatten()
 
+        ### LOGGING PSPEC
+
+        # pspec_difference = jnp.log10(jnp.abs(pspec_difference))
+
         if self.config_params.old_prior:  # old version
             # FT and get only the independent modes
             self.fourier_box = self.fft_jax(candidate_field)
@@ -397,7 +401,7 @@ class SwitchMinimizer:
             prior = (real_prior + imag_prior) / self.side_length**self.dim
         elif self.config_params.new_prior:
             sigma = counts ** 2
-            prior = jnp.mean(pspec_difference**2/sigma)
+            prior = jnp.sum(pspec_difference**2/sigma)
 
         if self.likelihood_off:
             likelihood = 0
@@ -474,6 +478,8 @@ class SwitchMinimizer:
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
+        print("SKA Effects")
+        print(self.config_params.ska_effects)
         batt_model_instance = Dens2bBatt(field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
