@@ -18,7 +18,7 @@ from jax.scipy.optimize import \
 # from jax.example_libraries import optimizers as jaxopt
 import jaxopt
 import theory_matter_ps
-from theory_matter_ps import after_spherical_p_spec_normal, spherical_p_spec_normal
+from theory_matter_ps import spherical_p_spec_normal, circular_spec_normal
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
@@ -52,6 +52,35 @@ class SwitchMinimizer:
         # assert np.count_nonzero(check_setup_bool_arr) == 1
 
         self.config_params = config_params
+        print("\n========== Configuration Parameters ==========")
+        print(f"SKA Effects: {self.config_params.ska_effects}")
+        print(f"Free Parameters: {self.config_params.free_params}")
+        print(f"Redshift (z): {self.config_params.z}")
+        print(f"Truth Field: {self.config_params.truth_field}")
+        print(f"Brightness Temperature Field: {self.config_params.data}")
+        print(f"Number of Bins: {self.config_params.num_bins}")
+        print(f"Nothing Off: {self.config_params.nothing_off}")
+        print(f"Plot Directory: {self.config_params.plot_direc}")
+        print(f"Side Length: {self.config_params.side_length}")
+        print(f"Physical Side Length: {self.config_params.physical_side_length}")
+        print(f"Dimensions: {self.config_params.dim}")
+        print(f"Max Iterations: {self.config_params.iter_num_max}")
+        print(f"Max Restarts: {self.config_params.rest_num_max}")
+        print(f"Noise Off: {self.config_params.noise_off}")
+        print(f"Run Optimizer: {self.config_params.run_optimizer}")
+        print(f"MSE Plot On: {self.config_params.mse_plot_on}")
+        print(f"Weighted Prior: {self.config_params.weighted_prior}")
+        print(f"New Prior: {self.config_params.new_prior}")
+        print(f"Old Prior: {self.config_params.old_prior}")
+        print(f"Verbose: {self.config_params.verbose}")
+        print(f"Debug Mode: {self.config_params.debug}")
+        print(f"Use Truth MM: {self.config_params.use_truth_mm}")
+        print(f"Save Prior Likelihood Array: {self.config_params.save_prior_likelihood_arr}")
+        print(f"Random Seed: {self.config_params.seed}")
+        print(f"Create Instance: {self.config_params.create_instance}")
+        print(f"Use Matter Power Spectrum Starting Field: {self.config_params.use_matter_pspec_starting_field}")
+        print(f"Normalize Everything: {self.config_params.normalize_everything}")
+        print("==============================================\n")
         self.s_field = s_field
 
         ## new stuff
@@ -59,7 +88,7 @@ class SwitchMinimizer:
         print("resolution ", self.resolution)
         self.area = self.config_params.side_length ** 2
         self.volume = self.config_params.side_length**3
-        # kmax = 2 * jnp.pi / self.physical_side_length * (self.side_length / 2)
+        # kmax = 2 * jnp.pi / self.physical_side_length * (self.config_params.side_length / 2)
         kmax = 50
         # get camb pspec no matter what
         self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.config_params.physical_side_length, self.config_params.z, self.config_params.dim)
@@ -93,14 +122,19 @@ class SwitchMinimizer:
             pb_data_unbiased_field = self.create_better_normal_field(seed=self.config_params.seed).delta_x()
             # truth field is just unbiased version made with pbox
             self.truth_field = jnp.asarray(pb_data_unbiased_field)
+            assert self.truth_field.ndim == self.config_params.dim
             print("STANDARD DEVIATION OF TRUTH FIELD")
             print(jnp.std(self.truth_field))
 
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
+            assert(self.data.ndim == self.config_params.dim)
+
             if self.config_params.ska_effects:
                 self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
                 self.data = self.ska.brightness_temp
+                assert (self.data.ndim == self.config_params.dim)
+
         else:  # data included in initialization of class
             print("Using previously generated data and truth field.")
             assert (jnp.shape(self.config_params.truth_field)[0] != 0)
@@ -114,6 +148,9 @@ class SwitchMinimizer:
                 self.data = self.ska.brightness_temp
             # print("Not yet implemented")
             # exit()
+
+        assert(self.data.ndim == self.config_params.dim)
+
         ###############################################################################################################
         ## SETTING UP PRIOR
         # calculating both regardless of prior
@@ -185,17 +222,14 @@ class SwitchMinimizer:
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
             self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
         # self.rms_Tb = jnp.std(self.data)
-        if self.config_params.ska_effects:
+        if self.config_params.ska_effects and not self.config_params.cov_matrix_data:
             self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
-        # else:
-        self.rms_Tb = jnp.std(self.data)
-        self.rms_Tb = 1
-
-        # self.generate_data_cov()
-        self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
-            # self.N_diag = self.data_cov
-        # print("N_diagonal")
-        # id_print(self.N_diag)
+            self.rms_Tb = jnp.std(self.data)
+            self.rms_Tb = 1
+        elif not self.config_params.ska_effects and not self.config_params.cov_matrix_data:
+            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+        elif self.config_params.cov_matrix_data: # need both ska_effects and cov_matrix_data to be on
+            self.generate_data_cov()
         ###############################################################################################################
 
         # Generate a starting point field that is just 0.2 * rms of the data if it's not already specified
@@ -217,19 +251,27 @@ class SwitchMinimizer:
                 self.s_field_original = self.create_normal_field(std_dev=0.1)
                 # Currently feeding standard deviation of truth field, could change this to data / 27 but think the latter
                 # might make initial amplitudes too high
-                self.s_field = jnp.asarray(self.s_field_original.flatten())
                 # self.s_field = self.s_field.at[self.ionized_indices_flattened].set(1)
                 noise = jnp.asarray(self.s_field_original.flatten())
-                print("trying with assumption that we know neutral pixels")
-                truth_field_flattened = jnp.asarray(self.truth_field.flatten())
+                # print("trying with assumption that we know neutral pixels")
+                # truth_field_flattened = jnp.asarray(self.truth_field.flatten())
                 # self.s_field = self.s_field_original = truth_field_flattened + 1
+                # self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
 
-                self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
+        # flatten s_field for input to optimizer
+        self.s_field = jnp.asarray(self.s_field_original.flatten())
 
         if self.config_params.normalize_everything:
             self.truth_field = self.normalize(self.truth_field)
             self.data = self.normalize(self.data)
-        ###############################################################################################################
+
+        ## Dimensions checks
+        print("length of data")
+        print(self.data.ndim)
+        assert (self.data.ndim == self.config_params.dim)
+        assert (len(self.s_field) == self.config_params.side_length**self.config_params.dim)
+        assert (self.truth_field.ndim == self.config_params.dim)
+        ######################################################################brightness_temp.dim#########################################
 
     def normalize(self, field):
         min_field = jnp.min(field)
@@ -237,27 +279,105 @@ class SwitchMinimizer:
         diff = max_field - min_field
         return (2 * (field - min_field) / diff) - 1
 
-    def generate_data_cov(self, samples=100):
+    def generate_data_cov(self, samples=20000):
         """
         Generate data covariance
         """
-        # Create a PRNGKey (Pseudo-Random Number Generator key)
-        self.side_length = np.shape(self.data)[0]
-        self.dim =3
-        key = jax.random.PRNGKey(0)  # '0' is the seed for reproducibility
-        cov_input = np.empty((samples, self.side_length**self.dim))
-        # Generate a random integer between 0 and 1000
-        for i in range(samples): # generate 100 draws of 3D data
-            random_int = jax.random.randint(key, shape=(), minval=0, maxval=1001)  # maxval is exclusive
-            pb_data_unbiased_field = self.create_better_normal_field(seed=random_int).delta_x()
-            # truth field is just unbiased version made with pbox
-            mock_truth_field = jnp.asarray(pb_data_unbiased_field)
-            cov_input[i, :] = self.bias_field(mock_truth_field).flatten()
-        cov_input_transposed = cov_input.T
-        # assert(np.shape(cov_input_transposed) == (self.side_length**self.dim, samples))
-        self.data_cov = np.cov(cov_input_transposed)
-        print(np.shape(self.data_cov))
-        # assert(np.shape(self.data_cov) == (self.side_length**(self.dim*2)))
+        try:
+            self.data_cov = np.load(f"cov_matrix/data_cov_{self.config_params.side_length}_z_{self.config_params.z}.npy")
+            self.data_cov_inv = np.load(f"cov_matrix/data_cov_inv_{self.config_params.side_length}_z_{self.config_params.z}.npy")
+            plt.close()
+            plt.matshow(self.data_cov)
+            plt.colorbar()
+            print("saving here")
+            print(f"cov_matrix/data_cov_{self.config_params.side_length}_z_{self.config_params.z}.png")
+            plt.savefig(f"cov_matrix/data_cov_{self.config_params.side_length}_z_{self.config_params.z}.png")
+            plt.close()
+
+            plt.matshow(self.data_cov_inv)
+            plt.colorbar()
+            plt.savefig(f"cov_matrix/data_non_inv_cov_{self.config_params.side_length}_z_{self.config_params.z}.png")
+            plt.close()
+        except Exception as error:
+            print(error)
+            print("Making covariance matrix")
+            key = jax.random.PRNGKey(0)  # '0' is the seed for reproducibility
+            cov_input = jnp.empty((samples, self.config_params.side_length**self.config_params.dim))
+            # Generate a random integer between 0 and 1000
+            for i in range(samples): # generate n draws of ND data
+                key, subkey = jax.random.split(key)  # Update key to ensure new randomness
+                random_int = jax.random.randint(subkey, shape=(), minval=0, maxval=4*samples)
+                pb_data_unbiased_field = self.create_better_normal_field(seed=random_int).delta_x()
+                jax.debug.print(str(pb_data_unbiased_field[0,0]))
+                # truth field is just unbiased version made with pbox
+                mock_truth_field = jnp.asarray(pb_data_unbiased_field)
+                cov_input = cov_input.at[i, :].set(self.bias_field(mock_truth_field).flatten()) # (num_sample, field)
+            cov_input_transposed = cov_input.T # inverting to be (field, num_sample) since we want (random variable, samples)
+            assert(np.shape(cov_input_transposed) == (self.config_params.side_length**self.config_params.dim, samples))
+            jax.debug.print(str(cov_input_transposed))
+            self.data_cov = jnp.cov(cov_input_transposed)
+            jax.debug.print(str(self.data_cov))
+            self.data_cov_inv = jnp.linalg.inv(self.data_cov)
+            jax.debug.print(str(self.data_cov_inv))
+
+            expected_shape = tuple([self.config_params.side_length**self.config_params.dim]*self.config_params.dim)
+            jax.debug.print(str(expected_shape))
+            jax.debug.print(str(np.shape(self.data_cov)))
+            assert(np.shape(self.data_cov) == expected_shape)
+
+            print("saving here")
+            print("cov_matrix/data_cov.png")
+
+            np.save(f"cov_matrix/data_cov_{self.config_params.side_length}_z_{self.config_params.z}.npy", np.array(self.data_cov))
+            np.save(f"cov_matrix/data_cov_inv_{self.config_params.side_length}_z_{self.config_params.z}.npy", np.array(self.data_cov_inv))
+            plt.close()
+            plt.matshow(self.data_cov)
+            plt.colorbar()
+            plt.savefig(f"cov_matrix/data_cov_{self.config_params.side_length}_z_{self.config_params.z}.png")
+            plt.close()
+
+            plt.matshow(self.data_cov_inv)
+            plt.colorbar()
+            plt.savefig(f"cov_matrix/data_inv_cov_{self.config_params.side_length}_z_{self.config_params.z}.png")
+            plt.close()
+
+        self.check_cov_matrix_convergence()
+        exit()
+
+    def check_cov_matrix_convergence(self):
+        """
+        Check covariance matrix (positive-semi definite square) for convergence
+        1) Checks whether PSD (also means square and symmetric)
+        2) check whether well-conditioned and stabilized: C^-1 C ~ I
+        assertion statement raised if either condition is false
+        """
+        #### checking positive semi-definite
+        eigenvalues = jnp.linalg.eigvalsh(self.data_cov)  # Compute eigenvalues (for symmetric/Hermitian matrices)
+        PSD = jnp.all(eigenvalues >= 0)  # Check if all eigenvalues are non-negative (https://en.wikipedia.org/wiki/Definite_matrix)
+
+        #### checking whether symmetric
+
+        print("C^-1 C ~ I?")
+        difference_cov = jnp.matmul(self.data_cov_inv, self.data_cov)
+        # Compute the error from the identity matrix
+        identity_error = jnp.linalg.norm(difference_cov - jnp.eye(difference_cov.shape[0]))
+
+        # Convergence threshold
+        tol = 10
+        if identity_error < tol:
+            converged = True
+            print("identity error")
+            print(identity_error)
+            print("Covariance matrix has converged!")
+        else:
+            converged = False
+            print("identity error")
+            print(identity_error)
+            print(f"Covariance matrix has NOT converged. Error: {identity_error}")
+
+
+        assert(converged and PSD)
+
 
     def create_normal_field(self, std_dev):
         """This method creates a numpy random field and converts it to a Jax array"""
@@ -365,8 +485,14 @@ class SwitchMinimizer:
         # jax.debug.print("discrepancy {x} 🤯", x=discrepancy[:1])
 
         #### get likelihood for all cases #############################################################################
-        # x = discrepancy.flatten() @ self.data_cov @ discrepancy.flatten()
-        field_likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+        if self.config_params.cov_matrix_data:
+            discrepancy = discrepancy.flatten().reshape(-1, 1) # ensuring column vector (nx1)
+            field_likelihood = jax.numpy.matmul(discrepancy.T, self.data_cov_inv)
+            likelihood = jax.numpy.matmul(field_likelihood, discrepancy) # (1xn) (nxn) (nx1)
+            jax.debug.print("Likelihood: {}", likelihood)
+        else:
+            field_likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+
         likelihood = np.sum(field_likelihood)
         ###############################################################################################################
         # want circular/spherical pspec regardless of which prior we use
@@ -386,7 +512,7 @@ class SwitchMinimizer:
 
         ### LOGGING PSPEC
 
-        # pspec_difference = jnp.log10(jnp.abs(pspec_difference))
+        pspec_difference = jnp.log10(jnp.abs(pspec_difference))
 
         if self.config_params.old_prior:  # old version
             # FT and get only the independent modes
@@ -398,7 +524,7 @@ class SwitchMinimizer:
             imag_prior = jnp.dot(fourier_nums_imag ** 2,
                                  2 / self.pspec_indep_nums_im)  # Half variance for imag
 
-            prior = (real_prior + imag_prior) / self.side_length**self.dim
+            prior = (real_prior + imag_prior) / self.config_params.side_length**self.dim
         elif self.config_params.new_prior:
             sigma = counts ** 2
             prior = jnp.sum(pspec_difference**2/sigma)
@@ -553,7 +679,7 @@ class SwitchMinimizer:
     def debug_likelihood(self):
         """"Makes same plots to show likelihood and prior as a function of iteration"""
         fig, ax = plt.subplots(1, 2)
-        plt.title(f"bias = {self.actual_bias}, side length = {self.side_length}")
+        plt.title(f"bias = {self.actual_bias}, side length = {self.config_params.side_length}")
         ax[0].plot(self.param_value_all[:self.iter_num], label="param")
         ax[0].hlines(y=self.actual_bias, xmin=0, xmax=self.iter_num, label="truth param", color='k')
         ax[0].set_xlabel("num iterations")
@@ -565,16 +691,16 @@ class SwitchMinimizer:
         ax[1].set_xlabel("num iterations")
         ax[1].set_yscale("log")
         ax[1].legend()
-        plt.savefig(f"{self.plot_direc}/plots/param.png")
+        plt.savefig(f"{self.config_params.plot_direc}/plots/param.png")
         plt.close()
 
         if self.dim == 2:
             value_all_reshaped = np.reshape(self.value_all[:, :self.iter_num],
-                                            (self.side_length, self.side_length, self.iter_num))
+                                            (self.config_params.side_length, self.config_params.side_length, self.iter_num))
             likelihood_all_reshaped = np.reshape(self.likelihood_indiv_all[:, :self.iter_num],
-                                                 (self.side_length, self.side_length, self.iter_num))
-            for i in range(self.side_length):
-                for j in range(self.side_length):
+                                                 (self.config_params.side_length, self.config_params.side_length, self.iter_num))
+            for i in range(self.config_params.side_length):
+                for j in range(self.config_params.side_length):
                     fig, ax = plt.subplots(1, 2)
                     # ax[0].set_yscale("log")
                     ax[0].hlines(y=self.truth_field[i, j], color='k', xmin=0, xmax=self.iter_num)
@@ -588,12 +714,12 @@ class SwitchMinimizer:
                     ax[1].legend()
                     ax[1].set_xlabel("num iterations")
 
-                    fig.suptitle(f"bias = {self.actual_bias}, side length = {self.side_length}")
-                    plt.savefig(f"{self.plot_direc}/plots/pixel_num_{i * j}_check.png")
+                    fig.suptitle(f"bias = {self.actual_bias}, side length = {self.config_params.side_length}")
+                    plt.savefig(f"{self.config_params.plot_direc}/plots/pixel_num_{i * j}_check.png")
                     plt.close()
 
         else:
-            for i in range(self.side_length ** self.dim):
+            for i in range(self.config_params.side_length ** self.dim):
                 fig, ax = plt.subplots(1, 2)
                 ax[0].plot(self.value_all[i, :self.iter_num])
                 ax[0].set_xlabel("num iterations")
@@ -604,6 +730,6 @@ class SwitchMinimizer:
                 ax[1].plot(self.prior_param_all[:self.iter_num], label="total prior")
                 ax[1].legend()
                 ax[1].set_xlabel("num iterations")
-                fig.suptitle(f"bias = {self.actual_bias}, side length = {self.side_length}")
-                plt.savefig(f"{self.plot_direc}/plots/pixel_num_{i}_check.png")
+                fig.suptitle(f"bias = {self.actual_bias}, side length = {self.config_params.side_length}")
+                plt.savefig(f"{self.config_params.plot_direc}/plots/pixel_num_{i}_check.png")
                 plt.close()

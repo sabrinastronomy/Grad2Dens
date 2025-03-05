@@ -13,7 +13,7 @@ import os
 from matplotlib.ticker import MaxNLocator
 from jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal
+from theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
 import argparse
 from scipy.ndimage import gaussian_filter
 from matplotlib import colors
@@ -57,7 +57,6 @@ class InferDens(SwitchMinimizer):
     def __init__(self, config_params, s_field):
         self.config_params = config_params
         self.s_field = s_field
-        super().__init__(config_params, s_field)
         self.final_function_value_output = jnp.zeros(self.config_params.iter_num_max)
         self.mse_vals = jnp.empty(self.config_params.iter_num_max)
         self.posterior_vals = jnp.empty(self.config_params.iter_num_max)
@@ -66,6 +65,9 @@ class InferDens(SwitchMinimizer):
         self.pixel_tracks_ionized = jnp.empty(self.config_params.iter_num_max)
         self.pixel_tracks_neutral = jnp.empty(self.config_params.iter_num_max)
         self.hessian_vals = jnp.empty(self.config_params.iter_num_max)
+        super().__init__(config_params, s_field)
+
+
 
         self.labels = []
         self.iter_failed_line_search_arr = []
@@ -90,6 +92,7 @@ class InferDens(SwitchMinimizer):
             except:
                 print("directory already exists")
             self.plot_direc = new_direc
+            self.config_params.plot_direc = new_direc
         else:
             self.plot_direc = self.config_params.plot_direc # this overwrites the plot_directory in the SwitchMinimizer class
 
@@ -256,6 +259,11 @@ class InferDens(SwitchMinimizer):
         self.masked_field[self.neutral_indices_mask_SHAPED] = 0
         if self.config_params.dim == 3:
             reshaped_masked = self.masked_field[slice_idx, :, :]
+        elif self.config_params.dim == 2:
+            reshaped_masked = self.masked_field
+        else:
+            print("Dimension not supported")
+            exit()
         plt.imshow(reshaped_masked)
         plt.colorbar()
         plt.title("Inferred Ionized Pixel Values (all others masked)")
@@ -516,7 +524,30 @@ class InferDens(SwitchMinimizer):
         ax_mse.semilogy(prior_arr, label="Prior", ls="", marker="o", alpha=0.4)
         ax_mse.semilogy(like_arr, label="Likelihood", ls="", marker="o", alpha=0.4)
         ax_mse.semilogy(posterior_arr, label="Posterior", ls="", marker="o", alpha=0.4)
+
+        print("-" * 40)  # Prints a line divider
+        print("prior_arr")
+        print(prior_arr)
+        print("-" * 40)
+
+        print("-" * 40)  # Prints a line divider
+        print("like_arr")
+        print(like_arr)
+        print("-" * 40)
+
+        print("-" * 40)  # Prints a line divider
+        print("posterior_arr")
+        print(posterior_arr)
+        print("-" * 40)
+
         # ax_mse.semilogy(final_function_value_output, label="Output from minimizer", ls="--")
+        # Plot NaN values separately with 'X' marker
+        # ax_mse.semilogy(x_vals[np.isnan(prior_arr)], np.ones_like(x_vals[np.isnan(prior_arr)]), marker="x", ls="",
+        #                 color="C0", label="Prior (NaN)")
+        # ax_mse.semilogy(x_vals[np.isnan(like_arr)], np.ones_like(x_vals[np.isnan(like_arr)]), marker="x", ls="",
+        #                 color="C1", label="Likelihood (NaN)")
+        # ax_mse.semilogy(x_vals[np.isnan(posterior_arr)], np.ones_like(x_vals[np.isnan(posterior_arr)]), marker="x",
+        #                 ls="", color="C2", label="Posterior (NaN)")
 
         # for iter_num_big in range(self.config_params.iter_num_max):
         #     if labels[iter_num_big] == "prior_off" and iter_num_big == 0:
@@ -592,11 +623,14 @@ class InferDens(SwitchMinimizer):
             data_slice = self.data[slice_idx, :, :]
             best_field_slice = self.best_field_reshaped[slice_idx, :, :]
             truth_field_slice = self.truth_field[slice_idx, :, :]
+            s_field_original = jnp.reshape(self.s_field_original, (self.size))[slice_idx, :, :]
         else:
             # If fields are 2D, no slicing needed
             data_slice = self.data
             best_field_slice = self.best_field_reshaped
             truth_field_slice = self.truth_field
+            s_field_original = jnp.reshape(self.s_field_original, (self.size))
+
 
         # Calculate the residual (truth - best)
         residual_slice = truth_field_slice - best_field_slice
@@ -637,14 +671,22 @@ class InferDens(SwitchMinimizer):
         ax4.set_xlabel("Pixel #")
 
         # Plotting Starting field (truth-best)
-        im5 = ax5.imshow(jnp.reshape(self.s_field_original, (self.size))[slice_idx, :, :]) #, norm=norm_shared_residual)
+        im5 = ax5.imshow(s_field_original) #, norm=norm_shared_residual)
         ax5.set_title("Starting Field") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
         ax5.set_xlabel("Pixel #")
 
         # Plotting Starting field (truth-best)
         best_data_slice_inferred = Dens2bBatt(self.best_field_reshaped, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
 
-        im6 = ax6.imshow(best_data_slice_inferred.temp_brightness[slice_idx, :, :])  # , norm=norm_shared_residual)
+        if self.config_params.dim == 3:
+            im6 = ax6.imshow(best_data_slice_inferred.temp_brightness[slice_idx, :, :])  # , norm=norm_shared_residual)
+        elif self.config_params.dim == 2:
+            im6 = ax6.imshow(best_data_slice_inferred.temp_brightness)  # , norm=norm_shared_residual)
+
+        else:
+            print("Dimension not supported")
+            exit()
+
         ax6.set_title("Inferred Data")  # + (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
         ax6.set_xlabel("Pixel #")
 
@@ -862,7 +904,7 @@ class ConfigParam:
                  run_optimizer=False, mse_plot_on=False,
                  weighted_prior=None, new_prior=False, old_prior=False, verbose=False,
                  debug=False, use_truth_mm=False, save_prior_likelihood_arr=False, seed=1010,
-                 create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False):
+                 create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False, cov_matrix_data=True):
         """
         :param free_params - dictionary with free parameters to use
         :param z - the redshift you would like to create your density field at
@@ -884,6 +926,8 @@ class ConfigParam:
         :param autorun (Default: True) - run an immediate gradient descent
         :param use_matter_pspec_starting_field (Default: False) - start field with a power spectrum matching truth from CAMB
         :param normalize_everything - normalize the entire field
+        :param cov_matrix_data - use cov matrix, can only work in 2D because of memory issues
+
         """
         self.ska_effects = ska_effects
         self.free_params = free_params
@@ -912,6 +956,9 @@ class ConfigParam:
         self.create_instance = create_instance
         self.use_matter_pspec_starting_field = use_matter_pspec_starting_field
         self.normalize_everything = normalize_everything
+        self.cov_matrix_data = cov_matrix_data
+        if self.cov_matrix_data:
+            assert self.dim == 2
         assert(self.new_prior != self.old_prior)
 
     def save_to_file(self, directory, filename="config_run.txt"):
@@ -934,7 +981,7 @@ static_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiduci
 def grid_test(free_param_name, free_param_arr, static_redshift=True,
               ska_effects=False,
               nominal=False, side_length=16, physical_side_length=16, bins=8, brightness_temperature_field=None,
-              truth_field=None, iter_num_max=3, rest_num_max=2, nothing_off=False):
+              truth_field=None, iter_num_max=3, rest_num_max=2, nothing_off=False, dimensions=3, cov_matrix_data=False):
     import GPUtil
     import gc
     fiducial_params = static_params.copy()
@@ -968,11 +1015,12 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
                          brightness_temperature_field=brightness_temperature_field, num_bins=bins,
                          nothing_off=nothing_off, plot_direc="", side_length=side_length,
                          physical_side_length=physical_side_length,
-                         dimensions=3, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
+                         dimensions=dimensions, iter_num_max=iter_num_max, rest_num_max=rest_num_max, noise_off=True,
                          run_optimizer=True, mse_plot_on=False,
                          weighted_prior=None, new_prior=True, old_prior=False, verbose=False,
                          debug=False, use_truth_mm=False, save_prior_likelihood_arr=True, seed=1,
-                         create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False)
+                         create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False,
+                         cov_matrix_data=cov_matrix_data)
 
 
     # DO FOR BOTH
@@ -989,19 +1037,19 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
 
 if __name__ == "__main__":
     run_optimizer = True
-    for z in [12]:
+    for z in [8, 10, 12]:
         static_params["redshift_run"] = z
         # truth_field = np.load(f"21cmfast_fields_1Mpcpp/density_{z}.npy")
         # brightness_temperature_field = np.load(f"21cmfast_fields_1Mpcpp/brightness_temp_{z}.npy")
 
-        grid_test("none", [None], static_redshift=True, ska_effects=True, nominal=True,
-                  bins=32,
-                  side_length=128,
-                  physical_side_length=128,
-                  iter_num_max=6,
+        grid_test("none", [None], static_redshift=True, ska_effects=False, nominal=True,
+                  bins=8,
+                  side_length=16,
+                  physical_side_length=16,
+                  iter_num_max=1,
                   rest_num_max=1,
                   nothing_off=True,
-                  truth_field=[], brightness_temperature_field=[])
+                  truth_field=[], brightness_temperature_field=[], dimensions=2, cov_matrix_data=True)
         exit()
         # Define parameter ranges
     alpha_values = np.linspace(0.1, 2, 10)

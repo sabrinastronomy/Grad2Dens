@@ -33,18 +33,21 @@ class SKAEffects:
         self.brightness_temp_original = np.copy(brightness_temp)
         self.brightness_temp = brightness_temp
         self.redshift = redshift
+        self.dim = self.brightness_temp.ndim
         self.resolution = np.shape(self.brightness_temp)[0] / physical_side_length  # pixels/mpc
         self.physical_side_length = physical_side_length
         if add_all:
             self.add_all_effects()
+        assert(self.brightness_temp.ndim == self.dim)
 
     def add_all_effects(self):
         # jax.debug.print("pre wedge brightness temp: {}", np.max(self.brightness_temp))
         # self.wedge()
         # jax.debug.print("pre convolution brightness temp: {}", np.max(self.brightness_temp))
         self.thermal_noise()
-
+        assert self.brightness_temp.ndim == self.dim
         self.beam_convolution()
+        assert self.brightness_temp.ndim == self.dim
         # jax.debug.print("pre thermal noise brightness temp: {}", np.max(self.brightness_temp))
         # jax.debug.print("post thermal noise brightness temp: {}", np.max(self.brightness_temp))
 
@@ -79,7 +82,7 @@ class SKAEffects:
         # b_max /= 3.086e+22 # m --> Mpc
 
         comoving_distance = cosmo.comoving_distance(self.redshift).to(
-            u.parsec).value / 1e6  # comoving distance to redshift
+            u.parsec).value / 1e6  # comoving distance for redshift in Mpc
 
         theta_z = 1.22 * redshifted_wavelength / b_max
         # print("theta_z")
@@ -96,15 +99,22 @@ class SKAEffects:
         mean = np.array([0.0, 0.0, 0.0])  # Center of the Gaussian
         std_dev = self.sigma_gauss  # Standard deviation of the Gaussian
         pixel_length = np.shape(self.brightness_temp)[0]
-
         half_pixel_length = self.physical_side_length / 2
-        x = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
-        y = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
-        z = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
-        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-
+        print("STD DEV OF KERNEL [M[C")
+        print(std_dev)
         # Compute the Gaussian field
-        gaussian_kernel = np.exp((-1/(2*std_dev**2)) * ((X - mean[0]) ** 2 + (Y - mean[1]) ** 2 + (Z - mean[2]) ** 2)) / (np.sqrt(2 * np.pi * std_dev ** 2))**3
+        if self.dim == 3:
+            x = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
+            y = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
+            z = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+            gaussian_kernel = np.exp((-1/(2*std_dev**2)) * ((X - mean[0]) ** 2 + (Y - mean[1]) ** 2 + (Z - mean[2]) ** 2)) / (np.sqrt(2 * np.pi * std_dev ** 2))**3
+        elif self.dim == 2:
+            x = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
+            y = np.linspace(-half_pixel_length, half_pixel_length, pixel_length)
+            X, Y = np.meshgrid(x, y, indexing='ij')
+            gaussian_kernel = np.exp((-1/(2*std_dev**2)) * ((X - mean[0]) ** 2 + (Y - mean[1]) ** 2)) / (np.sqrt(2 * np.pi * std_dev ** 2))**2
+
         # gaussian_kernel = np.zeros_like(self.brightness_temp)
         # gaussian_kernel = gaussian_kernel.at[pixel_length // 2, pixel_length // 2, pixel_length // 2].set(1)
         # gaussian_kernel /= np.sum(gaussian_kernel) # normalize
