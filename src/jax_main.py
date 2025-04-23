@@ -7,24 +7,18 @@ independent_only_jax function written by Adrian Liu and Adélie Gorce
 """
 
 # import jax related packages
-from ska_effects import SKAEffects
+from .ska_effects import SKAEffects
 import os
 import jax
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 from jax import config
-# from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
-from jax.scipy.optimize import \
-    minimize as minimize_jax  # this is the bread and butter algorithm of this work, minimization using Jax optimized gradients
-# from jax.example_libraries import optimizers as jaxopt
 import jaxopt
-import theory_matter_ps
-from theory_matter_ps import spherical_p_spec_normal, circular_spec_normal
+from .theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
-from jax_battaglia_full import Dens2bBatt
+from .jax_battaglia_full import Dens2bBatt
 import matplotlib
-from matplotlib.colors import SymLogNorm
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
@@ -91,7 +85,7 @@ class SwitchMinimizer:
         # kmax = 2 * jnp.pi / self.physical_side_length * (self.config_params.side_length / 2)
         kmax = 50
         # get camb pspec no matter what
-        self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.config_params.physical_side_length, self.config_params.z, self.config_params.dim)
+        self.pspec_true = get_truth_matter_pspec(kmax, self.config_params.physical_side_length, self.config_params.z, self.config_params.dim)
         ### get a tuple with the dimensions of the field
         self.size = []
         for i in range(self.config_params.dim):
@@ -128,10 +122,15 @@ class SwitchMinimizer:
 
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
+            self.raw_data = self.data.copy()
             assert(self.data.ndim == self.config_params.dim)
 
             if self.config_params.ska_effects:
-                self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
+                print("physical")
+                print(self.config_params.physical_side_length)
+                print("data")
+                print(np.shape(self.data))
+                self.ska = SKAEffects(self.data, self.config_params.z, self.config_params.physical_side_length)
                 self.data = self.ska.brightness_temp
                 assert (self.data.ndim == self.config_params.dim)
 
@@ -144,7 +143,7 @@ class SwitchMinimizer:
             print("NOT USING 21cmFAST DATA")
 
             if self.config_params.ska_effects:
-                self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
+                self.ska = SKAEffects(self.data, self.config_params.z, self.config_params.physical_side_length)
                 self.data = self.ska.brightness_temp
             # print("Not yet implemented")
             # exit()
@@ -156,7 +155,7 @@ class SwitchMinimizer:
         # calculating both regardless of prior
         if self.config_params.use_truth_mm:  # use theory matter power spectrum in prior
             if self.config_params.old_prior:
-                self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true,
+                self.kvals_truth, self.pspec_2d_true = convert_pspec_2_2D(self.pspec_true,
                                                                                            self.config_params.side_length,
                                                                                            self.config_params.z)
                 self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
@@ -221,11 +220,15 @@ class SwitchMinimizer:
             print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
             self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
-        # self.rms_Tb = jnp.std(self.data)
+        self.rms_Tb = 0.1
         if self.config_params.ska_effects and not self.config_params.cov_matrix_data:
-            self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
-            self.rms_Tb = jnp.std(self.data)
-            self.rms_Tb = 1
+            try:
+                self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+            except:
+                self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+
+            # self.rms_Tb = jnp.std(self.data)
+            # self.rms_Tb = 1
         elif not self.config_params.ska_effects and not self.config_params.cov_matrix_data:
             self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
         elif self.config_params.cov_matrix_data: # need both ska_effects and cov_matrix_data to be on
@@ -561,7 +564,7 @@ class SwitchMinimizer:
 
     def create_better_normal_field(self, seed, testing=False):
         if not testing: # always generate truth field with matter power spectrum
-            print("Using truth matter power spectrum to generate field.")
+            # print("Using truth matter power spectrum to generate field.")
             # def pspecify(k):
             #     k_shape = jnp.shape(k)
             #     if len(k_shape) < 1:

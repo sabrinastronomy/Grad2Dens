@@ -1,0 +1,28 @@
+ska_effects: True
+free_params: {'b_0': 0.593, 'alpha': 0.564, 'k_0': 0.12506, 'tanh_slope': 2, 'avg_z': 7}
+z: 14
+truth_field: []
+data: []
+num_bins: 8
+nothing_off: True
+plot_direc: /Users/sabrinaberger/Current Research Local/hmc_sabrina/Grad2Dens/src/ska_on_full_grid/ska_on_diff_start_free_params_b_0-0.593_alpha-0.564_k_0-0.12506_tanh_slope-2_avg_z-7_dimensions_2_z_14_perc_ionized_0.34766_seed_1010_bins_8
+side_length: 16
+physical_side_length: 16
+dim: 2
+iter_num_max: 1
+rest_num_max: 1
+noise_off: True
+run_optimizer: False
+mse_plot_on: False
+weighted_prior: None
+new_prior: True
+old_prior: False
+verbose: False
+debug: False
+use_truth_mm: False
+save_prior_likelihood_arr: False
+seed: 1010
+create_instance: False
+use_matter_pspec_starting_field: False
+normalize_everything: False
+cov_matrix_data: False

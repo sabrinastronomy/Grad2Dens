@@ -4,44 +4,44 @@ Created November, 2022
 Written by Sabrina Berger
 """
 import time
-from jax_main import SwitchMinimizer
+from .jax_main import SwitchMinimizer
 import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 import os
 from matplotlib.ticker import MaxNLocator
-from jax_battaglia_full import Dens2bBatt
+from .jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
+from .theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
 import argparse
 from scipy.ndimage import gaussian_filter
 from matplotlib import colors
 from scipy.stats import kurtosis, skew, kurtosistest, normaltest
 
-# Set up the argument parser
-parser = argparse.ArgumentParser(description="Run simulation with or without SKA effects")
+# # Set up the argument parser
+# parser = argparse.ArgumentParser(description="Run simulation with or without SKA effects")
+#
+# # Add an argument for ska_effects
+# parser.add_argument(
+#     '--ska_effects',
+#     action='store_true',
+#     help="Enable SKA effects if this flag is present"
+# )
+#
+# parser.add_argument(
+#     '--num_combinations',
+#     type=int,
+#     default=1,
+#     help="Number of combinations we stopped at (default is 1)"
+# )
 
-# Add an argument for ska_effects
-parser.add_argument(
-    '--ska_effects',
-    action='store_true',
-    help="Enable SKA effects if this flag is present"
-)
-
-parser.add_argument(
-    '--num_combinations',
-    type=int,
-    default=1,
-    help="Number of combinations we stopped at (default is 1)"
-)
-
-# Parse the arguments
-args = parser.parse_args()
-
-# Use the argument
-ska_effects = args.ska_effects
-num_combinations_start = args.num_combinations
+# # Parse the arguments
+# args = parser.parse_args()
+#
+# # Use the argument
+# ska_effects = args.ska_effects
+# num_combinations_start = args.num_combinations
 
 
 ### defaults for paper plots
@@ -66,9 +66,6 @@ class InferDens(SwitchMinimizer):
         self.pixel_tracks_neutral = jnp.empty(self.config_params.iter_num_max)
         self.hessian_vals = jnp.empty(self.config_params.iter_num_max)
         super().__init__(config_params, s_field)
-
-
-
         self.labels = []
         self.iter_failed_line_search_arr = []
         if config_params.plot_direc == "":
@@ -82,14 +79,15 @@ class InferDens(SwitchMinimizer):
 
 
             if self.truth_field.any() != None and not self.config_params.ska_effects:
-                new_direc = f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/ska_off_full_grid/diff_start_" + new_direc
+                new_direc = f"/Users/sabrinaberger/Current Research Local/hmc_sabrina/Grad2Dens/src/ska_off_full_grid/diff_start_" + new_direc
             elif self.truth_field.any() != None and self.config_params.ska_effects:
-                new_direc = f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/ska_on_full_grid/ska_on_diff_start_" + new_direc
+                new_direc = f"/Users/sabrinaberger/Current Research Local/hmc_sabrina/Grad2Dens/src/ska_on_full_grid/ska_on_diff_start_" + new_direc
             try:
                 os.mkdir(new_direc)
                 os.mkdir(new_direc + "/plots")
                 os.mkdir(new_direc + "/npy")
-            except:
+            except Exception as e:
+                print(e)
                 print("directory already exists")
             self.plot_direc = new_direc
             self.config_params.plot_direc = new_direc
@@ -100,8 +98,7 @@ class InferDens(SwitchMinimizer):
         print(self.plot_direc)
         print("Saved config parameters.")
         self.config_params.save_to_file(directory=self.plot_direc)
-
-        if run_optimizer:
+        if self.config_params.run_optimizer:
             self.infer_density_field()
             self.make_1_1_plots()
 
@@ -241,17 +238,17 @@ class InferDens(SwitchMinimizer):
         correlation_matrix = np.corrcoef(flat_field1, flat_field2)
         correlation_coefficient = np.round(correlation_matrix[0, 1], 2)
 
-        plt.close()
+        plt.close("all")
         plt.title(f"PDF of Density Fields, r={correlation_coefficient}")
         plt.hist(self.truth_field.flatten(), density=True, bins=100, label="Truth", alpha=0.4)
         plt.hist(self.best_field.flatten(), density=True, bins=100, label="Best", alpha=0.4)
         plt.legend()
         plt.savefig(self.plot_direc + f"/density_hist.png")
-        plt.close()
+        plt.close("all")
         plt.hist(self.data.flatten(), density=True, bins=100, alpha=0.4)
         plt.title(f"PDF of Data, r={correlation_coefficient}")
         plt.savefig(self.plot_direc + f"/data_hist.png")
-        plt.close()
+        plt.close("all")
 
     def plot_mask(self, slice_idx=10):
         plt.close()
@@ -290,7 +287,7 @@ class InferDens(SwitchMinimizer):
         plt.savefig("hessian.png", dpi=300)
 
     def plot_pspecs(self):
-        plt.close()
+        plt.close("all")
         fig, (axes_pspec, axes_residual) = plt.subplots(2, 1, figsize=(8, 6), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
         truth_field = np.load(self.plot_direc + f"/npy/truth_field_{self.config_params.z}.npy")
         self.num_k_modes = self.config_params.side_length
@@ -321,7 +318,6 @@ class InferDens(SwitchMinimizer):
         # Plot the nominal values and the shaded region
         axes_pspec.fill_between(kvals, lower_bound, upper_bound, alpha=0.3, color="red")
         axes_pspec.loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
-        axes_pspec.legend()
         difference = np.sqrt((pspec_normal - pspec_truth)**2)
         print("pspec differences")
         print(difference)
@@ -331,7 +327,30 @@ class InferDens(SwitchMinimizer):
         axes_residual.set_xlabel(r"$\rm \mathbf{k}~[Mpc^{-3}]$")
         axes_pspec.set_ylabel(r"$\rm P_{mm}~[Mpc^3]$")
         axes_residual.set_ylabel(r"$\rm P_{best} - P_{truth}~[Mpc^3]$")
-        axes_pspec.set_xticklabels([])  # Remove x-tic labels for the first frame
+        # axes_pspec.set_xticklabels([])  # Remove x-tic labels for the first frame
+        # low_lim_ax, upper_lim_ax = axes_pspec.get_ylim()[0], axes_pspec.get_ylim()[1]
+        #
+        # axes_pspec.vlines(x=2*np.pi / std_dev_beam_con, ymin=0.1, ymax=1, color="black")
+        # axes_residual.vlines(x=2*np.pi / std_dev_beam_con, ymin=0.1, ymax=1, color="black")
+        # axes_pspec.set_xlim((None, 5))
+        # axes_residual.set_xlim((None, 5))
+
+        ymin_pspec, ymax_pspec = axes_pspec.get_ylim()
+        ymin_residual, ymax_residual = axes_residual.get_ylim()
+        std_dev_beam_con = 0.6006098751085033 * 4 * np.sqrt(self.config_params.dim) # sorry i know this is bad lol
+        k_vertical = 2 * np.pi / std_dev_beam_con
+        if self.config_params.dim == 1:
+            k_vertical = np.abs(k_vertical)
+        elif self.config_params.dim == 2:
+            k_vertical = np.sqrt(k_vertical ** 2 + k_vertical ** 2)
+        elif self.config_params.dim == 3:
+            k_vertical = np.sqrt(k_vertical ** 2 + k_vertical ** 2 + k_vertical ** 2)
+        axes_pspec.vlines(x=k_vertical, ymin=ymin_pspec, ymax=ymax_pspec, color="black", linewidth=2, label="4*sigma*sqrt(ndim)")
+        axes_residual.vlines(x=k_vertical, ymin=ymin_residual, ymax=ymax_residual, color="black", linewidth=2)
+        axes_pspec.legend()
+
+        print(f"x position of vertical line: {k_vertical}")
+        print(f"x-axis limits: {axes_pspec.get_xlim()}")
 
         plt.subplots_adjust(hspace=0)
         plt.tight_layout()
@@ -381,8 +400,8 @@ class InferDens(SwitchMinimizer):
                         continue
                     else:
                         im = axes[i][j].imshow(
-                            self.truth_field, 
-                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None, 
+                            self.truth_field,
+                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None,
                             vmin=-1, vmax=1
                         )
                         t = axes[i][j].text(20, self.config_params.side_length - 10, "Truth Field", color="black", weight='bold')
@@ -391,7 +410,7 @@ class InferDens(SwitchMinimizer):
 
                         # Data field plot
                         im = data_axes[i][j].imshow(
-                            self.data, 
+                            self.data,
                             norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)) if log else None,
                             cmap="oranges"
                         )
@@ -653,7 +672,7 @@ class InferDens(SwitchMinimizer):
         else:
             im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
 
-        ax2.set_title(f"Inferred Density") #(skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
+        ax2.set_title(f"Inferred Density skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
         ax2.set_xlabel("Pixel #")
 
         # Plotting Truth
@@ -662,7 +681,7 @@ class InferDens(SwitchMinimizer):
         else:
             im3 = ax3.imshow(truth_field_slice)
 
-        ax3.set_title(f"Truth") #(skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
+        ax3.set_title(f"Truth skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
         ax3.set_xlabel("Pixel #")
 
         # Plotting Residual (truth-best)
@@ -770,19 +789,19 @@ class InferDens(SwitchMinimizer):
 
 
         # Plotting Inferred density
-        im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
-        ax2.set_title(f"Inferred Density") #(skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
+        im2 = ax2.imshow(best_field_slice)
+        ax2.set_title(f"Inferred Density") # f"skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
         ax2.set_xlabel("Pixel #")
 
         # Plotting Truth
-        im3 = ax3.imshow(truth_field_slice) #, norm=norm_shared)
-        ax3.set_title(f"Truth") #(skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
+        im3 = ax3.imshow(truth_field_slice)
+        ax3.set_title(f"Truth") # + f"skew = {skew_truth:.2e}, kurt = {krmurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
         ax3.set_xlabel("Pixel #")
 
         # Plotting Residual (truth-best)
 
         im4 = ax4.imshow(residual_slice) #, norm=norm_shared_residual)
-        ax4.set_title("Residual") #+ (" (Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else ""))
+        ax4.set_title("Residual") # + "(Slice {})".format(slice_idx) if self.truth_field.ndim == 3 else "")
         ax4.set_xlabel("Pixel #")
         # Create individual colorbars
         # Adding colorbars with consistent formatting
@@ -967,7 +986,7 @@ class ConfigParam:
                 file.write(f"{key}: {value}\n")
 
 # Print the result to verify
-print(f'SKA Effects Enabled: {ska_effects}')
+# print(f'SKA Effects Enabled: {ska_effects}')
 
 k_0_fiducial = 0.185 * 0.676 # changing from Mpc/h to Mpc
 alpha_fiducial = 0.564
@@ -1037,25 +1056,26 @@ def grid_test(free_param_name, free_param_arr, static_redshift=True,
 
 if __name__ == "__main__":
     run_optimizer = True
-    for z in [8, 10, 12]:
+    # for z in [10, 9, 8, 7, 6.5]:
+    for z in [12]:
         static_params["redshift_run"] = z
         # truth_field = np.load(f"21cmfast_fields_1Mpcpp/density_{z}.npy")
         # brightness_temperature_field = np.load(f"21cmfast_fields_1Mpcpp/brightness_temp_{z}.npy")
-
-        grid_test("none", [None], static_redshift=True, ska_effects=False, nominal=True,
-                  bins=8,
-                  side_length=16,
-                  physical_side_length=16,
-                  iter_num_max=1,
+        # that one doesn't work
+        grid_test("none", [None], static_redshift=True, ska_effects=ska_effects, nominal=True,
+                  bins=16,
+                  side_length=32,
+                  physical_side_length=32,
+                  iter_num_max=10,
                   rest_num_max=1,
                   nothing_off=True,
                   truth_field=[], brightness_temperature_field=[], dimensions=2, cov_matrix_data=True)
-        exit()
-        # Define parameter ranges
-    alpha_values = np.linspace(0.1, 2, 10)
-    b_0_values = np.logspace(-2, 2, 10)
-    k_0_values = np.logspace(-2, 2, 10)
-    avg_z_values = np.linspace(5, 8, 10)
+    exit()
+    # Define parameter ranges
+    # alpha_values = np.linspace(0.1, 2, 10)
+    # b_0_values = np.logspace(-2, 2, 10)
+    # k_0_values = np.logspace(-2, 2, 10)
+    # avg_z_values = np.linspace(5, 8, 10)
 
     # Create a mesh grid
     # alpha_grid, b_0_grid, k_0_grid, avg_z_grid = np.meshgrid(alphas, b_0s, k_0s, avg_z, indexing='ij')

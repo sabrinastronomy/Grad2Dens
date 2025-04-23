@@ -155,7 +155,7 @@ def get_truth_matter_pspec(kmax, side_length, z, dim):
         var2=model.Transfer_nonu,
     )
     if dim == 2:
-        pspec_k_func = lambda k: interp_l.P(z, k) / side_length
+        pspec_k_func = lambda k: interp_l.P(z, k) #/ side_length
     elif dim == 3:
         pspec_k_func = lambda k: interp_l.P(z, k)
     elif dim != 3:

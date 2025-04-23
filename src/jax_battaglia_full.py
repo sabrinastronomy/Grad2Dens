@@ -3,8 +3,15 @@ import jax.random
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from jax.scipy.special import i1 as j_bessel
-from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
-from ska_effects import SKAEffects
+# from jax.experimental.host_callback import id_print, \
+#     id_tap  # this is a way to print in Jax when things are preself.compiledd
+try:
+    from .ska_effects import SKAEffects # THIS IS FOR WHEN USING IN JUPYTER NOTEBOOK
+except:
+    from ska_effects import SKAEffects
+
+
+
 # Toy Density Field
 # nx, ny = (5, 5)
 # x = jnp.linspace(0, 1, nx)
@@ -18,7 +25,9 @@ class Dens2bBatt:
     """
     This class follows the Battaglia et al (2013) model to go from a density field to a temperature brightness field.
     """
-    def __init__(self, density, set_z, physical_side_length, resolution, flow=True, debug=False, free_params={}, apply_ska=False): # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
+
+    def __init__(self, density, set_z, physical_side_length, resolution, flow=True, debug=False, free_params={},
+                 apply_ska=False):  # b_0=0.5, alpha=0.2, k_0=0.1):         # go into k-space
         self.debug = debug
         self.density = density
         self.dim = self.density.ndim
@@ -34,9 +43,10 @@ class Dens2bBatt:
         self.resolution = resolution
 
         self.integrand = self.density
+        self.cube_len = jnp.shape(self.density)[0]
 
-        assert (self.resolution == self.physical_side_length / jnp.shape(self.density)[0]) # assert resolution in Mpc/pixel
-        
+        assert (self.resolution == self.physical_side_length / self.cube_len)  # assert resolution in Mpc/pixel
+
         if self.dim == 1:
             self.one_d = True
             self.two_d = False
@@ -53,22 +63,24 @@ class Dens2bBatt:
             print("Unsupported field dimensions!")
             exit()
 
-
-
         if self.one_d:
-            self.cube_len = len(self.density)
-            self.ks = jnp.fft.fftfreq(len(self.density)) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+            self.ks = jnp.fft.fftfreq(
+                len(self.density)) * 2 * jnp.pi * 1 / self.resolution  # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
             self.k_mags = jnp.abs(self.ks)
             self.X_HI = jnp.empty(self.cube_len)
             self.delta_k = self.ks[1] - self.ks[0]
 
-        elif self.two_d: # assuming 2D
-            self.kx = self.ky = jnp.fft.fftfreq(self.density.shape[0]) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
-            self.k_mags = jnp.sqrt(self.kx ** 2 + self.ky ** 2)
+        elif self.two_d:  # assuming 2D
+            self.kx = self.ky = jnp.fft.fftfreq(
+                self.cube_len) * 2 * jnp.pi * 1 / self.resolution  # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+
+            k1, k2 = jnp.meshgrid(self.kx, self.ky)  # 3D!! meshgrid :)
+            self.k_mags = jnp.sqrt(k1 ** 2 + k2 ** 2)
             self.delta_k = self.kx[1] - self.kx[0]
 
-        elif self.three_d: # assuming 3D
-            self.kx = self.ky = self.kz = jnp.fft.fftfreq(self.density.shape[0]) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+        elif self.three_d:  # assuming 3D
+            self.kx = self.ky = self.kz = jnp.fft.fftfreq(
+                self.cube_len) * 2 * jnp.pi * 1 / self.resolution  # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
 
             k1, k2, k3 = jnp.meshgrid(self.kx, self.ky, self.kz)  # 3D!! meshgrid :)
             self.k_mags = jnp.sqrt(k1 ** 2 + k2 ** 2 + k3 ** 2)
@@ -76,7 +88,8 @@ class Dens2bBatt:
             self.X_HI = jnp.empty((self.cube_len, self.cube_len, self.cube_len))
             self.delta_k = self.kx[1] - self.kx[0]
 
-        self.density_k = jnp.fft.fftn(self.integrand) * self.resolution**(self.density.ndim) # pixels^n -> Mpc^n, get normalization right
+        self.density_k = jnp.fft.fftn(self.integrand) * self.resolution ** (
+            self.density.ndim)  # pixels^n -> Mpc^n, get normalization right
         assert self.density_k.ndim == self.dim
         self.rs_top_hat_3d = lambda k: 3 * (jnp.sin(k) - jnp.cos(k) * k) / k ** 3  # pixelate and smoothing?
         self.rs_top_hat_3d_exp = lambda k: 1 - k ** 2 / 10
@@ -96,10 +109,9 @@ class Dens2bBatt:
             self.tophatted_ks = self.rs_top_hat_1d(self.k_mags)
 
         # static
-        self.b_mz = lambda k: self.b_0 / (1 + k / self.k_0) ** self.alpha # bias factor (8) in paper
+        self.b_mz = lambda k: self.b_0 / (1 + k / self.k_0) ** self.alpha  # bias factor (8) in paper
         if flow:
             self.flow()
-
 
     def apply_filter(self):
         w_z = self.b_mz(self.k_mags)
@@ -111,8 +123,8 @@ class Dens2bBatt:
         # elif self.three_d:
         #     self.density_k *= self.delta_k**3 # scaling amplitude in fourier space for 3D
 
-        self.delta_z = jnp.fft.ifftn(self.density_k) * (1/self.resolution**(self.density.ndim)) # get normalization right
-
+        self.delta_z = jnp.fft.ifftn(self.density_k) * (
+                    1 / self.resolution ** (self.density.ndim))  # get normalization right
 
         ### SMOOTHING
         # import jax.scipy as jsp
@@ -135,7 +147,7 @@ class Dens2bBatt:
             plt.colorbar()
             plt.show()
 
-    def get_z_re(self): # average z: order of half ionized half neutral
+    def get_z_re(self):  # average z: order of half ionized half neutral
         self.z_re = self.delta_z * (1 + self.avg_z) + (1 + self.avg_z) - 1
 
         if self.debug and self.two_d:
@@ -146,25 +158,26 @@ class Dens2bBatt:
             plt.show()
         if self.debug and self.three_d:
             plt.close()
-            plt.imshow(jnp.real(self.z_re[0,:,:]))
+            plt.imshow(jnp.real(self.z_re[0, :, :]))
             plt.colorbar()
             plt.title("z_re")
-            plt.savefig("/fred/oz113/sberger/paper_1_density/Grad2Dens/src/debug_ska/z_re.png")
+            plt.savefig("debug_ska/z_re.png")
             plt.close()
 
     def get_x_hi(self, tanh=True):
         if tanh:
             self.z_re = jnp.real(self.z_re)
-            self.X_HI = (jnp.tanh(self.tanh_slope*(self.set_z - self.z_re)) + 1) / 2.
+            self.X_HI = (jnp.tanh(self.tanh_slope * (self.set_z - self.z_re)) + 1) / 2.
         else:
-            self.X_HI = jnp.where(self.z_re > self.set_z, 0., 1.) # issue with NonConcreteBooleans in JAX, need this syntax
+            self.X_HI = jnp.where(self.z_re > self.set_z, 0.,
+                                  1.)  # issue with NonConcreteBooleans in JAX, need this syntax
 
         return self.X_HI
 
     def get_temp_brightness(self):
         first = 27 * self.X_HI
         second = 1 + self.density
-        self.temp_brightness = first*second
+        self.temp_brightness = first * second
         # self.temp_brightness = self.normalize(self.temp_brightness)
 
         # print("---------------")
@@ -185,6 +198,7 @@ class Dens2bBatt:
         self.get_temp_brightness()
         assert self.temp_brightness.ndim == self.dim
         if self.apply_ska:
-            self.ska = SKAEffects(self.temp_brightness, add_all=True, redshift=self.set_z, physical_side_length=self.physical_side_length)
+            self.ska = SKAEffects(self.temp_brightness, add_all=True, redshift=self.set_z,
+                                  physical_side_length=self.physical_side_length)
             self.temp_brightness = self.ska.brightness_temp
             assert self.temp_brightness.ndim == self.dim
