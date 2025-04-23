@@ -79,9 +79,9 @@ class InferDens(SwitchMinimizer):
 
 
             if self.truth_field.any() != None and not self.config_params.ska_effects:
-                new_direc = f"/Users/sabrinaberger/Current Research Local/hmc_sabrina/Grad2Dens/src/ska_off_full_grid/diff_start_" + new_direc
+                new_direc = f"ska_off_full_grid/diff_start_" + new_direc
             elif self.truth_field.any() != None and self.config_params.ska_effects:
-                new_direc = f"/Users/sabrinaberger/Current Research Local/hmc_sabrina/Grad2Dens/src/ska_on_full_grid/ska_on_diff_start_" + new_direc
+                new_direc = f"ska_on_diff_start_" + new_direc
             try:
                 os.mkdir(new_direc)
                 os.mkdir(new_direc + "/plots")
