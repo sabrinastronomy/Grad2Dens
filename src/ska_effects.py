@@ -313,9 +313,10 @@ if __name__ == "__main__":
     physical_side_length = 256
     pixel_side_length = 128
     z = 6.5
+    dim = 2
     pb = pbox.PowerBox(
         N=pixel_side_length,  # number of wavenumbers
-        dim=3,  # dimension of box
+        dim=dim,  # dimension of box
         pk=lambda k: 0.1 * k ** -2,  # The power-spectrum
         boxlength=physical_side_length,  # Size of the box (sets the units of k in pk)
         seed=1010,  # Use the same seed as our powerbox
@@ -324,7 +325,7 @@ if __name__ == "__main__":
     fiducial_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tanh_slope": tanh_fiducial,
                        "avg_z": midpoint_z_fiducial, "redshift_run": 6.5}  # b_0=0.5, alpha=0.2, k_0=0.1)
 
-    plt.imshow(pb.delta_x()[0, :, :])
+    plt.imshow(pb.delta_x())
     plt.colorbar()
     plt.title("density")
     plt.savefig("debug_ska/density.png")
@@ -334,7 +335,7 @@ if __name__ == "__main__":
                                      free_params=fiducial_params,
                                      apply_ska=False, debug=True)
 
-    plt.imshow(batt_model_instance.temp_brightness[:, :, 0])
+    plt.imshow(batt_model_instance.temp_brightness)
     plt.colorbar()
     plt.title("brightness temp")
     plt.savefig("debug_ska/default.png")

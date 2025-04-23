@@ -224,10 +224,10 @@ class SwitchMinimizer:
         # self.rms_Tb = jnp.std(self.data)
         if self.config_params.ska_effects and not self.config_params.cov_matrix_data:
             self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
-            self.rms_Tb = jnp.std(self.data)
-            self.rms_Tb = 1
+            self.stdev_Tb = jnp.std(self.data)
         elif not self.config_params.ska_effects and not self.config_params.cov_matrix_data:
-            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+            self.stdev_Tb = jnp.std(self.data)
+            self.N_diag = self.stdev_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
         elif self.config_params.cov_matrix_data: # need both ska_effects and cov_matrix_data to be on
             self.generate_data_cov()
         ###############################################################################################################
@@ -279,7 +279,7 @@ class SwitchMinimizer:
         diff = max_field - min_field
         return (2 * (field - min_field) / diff) - 1
 
-    def generate_data_cov(self, samples=20000):
+    def generate_data_cov(self, samples=100000):
         """
         Generate data covariance
         """
@@ -306,7 +306,7 @@ class SwitchMinimizer:
             # Generate a random integer between 0 and 1000
             for i in range(samples): # generate n draws of ND data
                 key, subkey = jax.random.split(key)  # Update key to ensure new randomness
-                random_int = jax.random.randint(subkey, shape=(), minval=0, maxval=4*samples)
+                random_int = jax.random.randint(subkey, shape=(), minval=0, maxval=1e6)
                 pb_data_unbiased_field = self.create_better_normal_field(seed=random_int).delta_x()
                 jax.debug.print(str(pb_data_unbiased_field[0,0]))
                 # truth field is just unbiased version made with pbox
@@ -342,7 +342,6 @@ class SwitchMinimizer:
             plt.close()
 
         self.check_cov_matrix_convergence()
-        exit()
 
     def check_cov_matrix_convergence(self):
         """
@@ -486,14 +485,22 @@ class SwitchMinimizer:
 
         #### get likelihood for all cases #############################################################################
         if self.config_params.cov_matrix_data:
-            discrepancy = discrepancy.flatten().reshape(-1, 1) # ensuring column vector (nx1)
-            field_likelihood = jax.numpy.matmul(discrepancy.T, self.data_cov_inv)
-            likelihood = jax.numpy.matmul(field_likelihood, discrepancy) # (1xn) (nxn) (nx1)
-            jax.debug.print("Likelihood: {}", likelihood)
-        else:
-            field_likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+            # log L = (d-m)^T C_21^-1 (d-m)
+            # discrepancy = discrepancy.flatten().reshape(-1, 1) # ensuring column vector (nx1)
+            # field_likelihood = discrepancy.T @ self.data_cov_inv
+            # likelihood = field_likelihood @ discrepancy # (1xn) (nxn) (nx1)
+            # jax.debug.print("Likelihood: {}", likelihood)
 
-        likelihood = np.sum(field_likelihood)
+            # log L = (m)^T C_21^-1 (m)
+            candidate_field_reshaped = candidate_field.flatten().reshape(-1, 1) # ensuring column vector (nx1)
+            half_likelihood = candidate_field_reshaped.T @ self.data_cov_inv
+            likelihood = half_likelihood @ candidate_field_reshaped # (1xn) (nxn) (nx1)
+            jax.debug.print("Likelihood: {}", likelihood)
+
+        else:
+            likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+
+        likelihood = np.sum(likelihood)
         ###############################################################################################################
         # want circular/spherical pspec regardless of which prior we use
         if self.config_params.dim == 2:
@@ -561,7 +568,7 @@ class SwitchMinimizer:
 
     def create_better_normal_field(self, seed, testing=False):
         if not testing: # always generate truth field with matter power spectrum
-            print("Using truth matter power spectrum to generate field.")
+            # print("Using truth matter power spectrum to generate field.")
             # def pspecify(k):
             #     k_shape = jnp.shape(k)
             #     if len(k_shape) < 1:

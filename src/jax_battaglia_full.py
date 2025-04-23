@@ -34,8 +34,9 @@ class Dens2bBatt:
         self.resolution = resolution
 
         self.integrand = self.density
+        self.cube_len = jnp.shape(self.density)[0]
 
-        assert (self.resolution == self.physical_side_length / jnp.shape(self.density)[0]) # assert resolution in Mpc/pixel
+        assert (self.resolution == self.physical_side_length / self.cube_len) # assert resolution in Mpc/pixel
         
         if self.dim == 1:
             self.one_d = True
@@ -56,19 +57,18 @@ class Dens2bBatt:
 
 
         if self.one_d:
-            self.cube_len = len(self.density)
             self.ks = jnp.fft.fftfreq(len(self.density)) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
             self.k_mags = jnp.abs(self.ks)
             self.X_HI = jnp.empty(self.cube_len)
             self.delta_k = self.ks[1] - self.ks[0]
 
         elif self.two_d: # assuming 2D
-            self.kx = self.ky = jnp.fft.fftfreq(self.density.shape[0]) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+            self.kx = self.ky = jnp.fft.fftfreq(self.cube_len) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
             self.k_mags = jnp.sqrt(self.kx ** 2 + self.ky ** 2)
             self.delta_k = self.kx[1] - self.kx[0]
 
         elif self.three_d: # assuming 3D
-            self.kx = self.ky = self.kz = jnp.fft.fftfreq(self.density.shape[0]) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
+            self.kx = self.ky = self.kz = jnp.fft.fftfreq(self.cube_len) * 2 * jnp.pi * 1 / self.resolution # follow Fourier conventions and convert from pixel^-1 to Mpc^-1
 
             k1, k2, k3 = jnp.meshgrid(self.kx, self.ky, self.kz)  # 3D!! meshgrid :)
             self.k_mags = jnp.sqrt(k1 ** 2 + k2 ** 2 + k3 ** 2)
