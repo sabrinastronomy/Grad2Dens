@@ -1,9 +1,7 @@
-# from ects import SKAEffects
 import jax.random
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from jax.scipy.special import i1 as j_bessel
-from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
 from ska_effects import SKAEffects
 # Toy Density Field
 # nx, ny = (5, 5)

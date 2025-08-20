@@ -29,7 +29,7 @@ class SKAEffects:
     # 3) the wedge (converting to kperp/kparallel pspec, cutting frequencies, and then going back to real space)
     """
 
-    def __init__(self, brightness_temp, add_all, redshift, physical_side_length=None):
+    def __init__(self, brightness_temp, redshift, physical_side_length=None, add_all=True):
         self.brightness_temp_original = np.copy(brightness_temp)
         self.brightness_temp = brightness_temp
         self.redshift = redshift
@@ -44,10 +44,10 @@ class SKAEffects:
         # jax.debug.print("pre wedge brightness temp: {}", np.max(self.brightness_temp))
         # self.wedge()
         # jax.debug.print("pre convolution brightness temp: {}", np.max(self.brightness_temp))
-        self.thermal_noise()
-        assert self.brightness_temp.ndim == self.dim
+        # self.thermal_noise()
+        # assert self.brightness_temp.ndim == self.dim
         self.beam_convolution()
-        assert self.brightness_temp.ndim == self.dim
+        # assert self.brightness_temp.ndim == self.dim
         # jax.debug.print("pre thermal noise brightness temp: {}", np.max(self.brightness_temp))
         # jax.debug.print("post thermal noise brightness temp: {}", np.max(self.brightness_temp))
 
@@ -100,7 +100,7 @@ class SKAEffects:
         std_dev = self.sigma_gauss  # Standard deviation of the Gaussian
         pixel_length = np.shape(self.brightness_temp)[0]
         half_pixel_length = self.physical_side_length / 2
-        print("STD DEV OF KERNEL [M[C")
+        print("STD DEV OF KERNEL [Mpc]")
         print(std_dev)
         # Compute the Gaussian field
         if self.dim == 3:
@@ -115,16 +115,17 @@ class SKAEffects:
             X, Y = np.meshgrid(x, y, indexing='ij')
             gaussian_kernel = np.exp((-1/(2*std_dev**2)) * ((X - mean[0]) ** 2 + (Y - mean[1]) ** 2)) / (np.sqrt(2 * np.pi * std_dev ** 2))**2
 
-        # gaussian_kernel = np.zeros_like(self.brightness_temp)
-        # gaussian_kernel = gaussian_kernel.at[pixel_length // 2, pixel_length // 2, pixel_length // 2].set(1)
-        # gaussian_kernel /= np.sum(gaussian_kernel) # normalize
+        gaussian_kernel /= np.sum(gaussian_kernel) # normalize, this is key or values will become really small in resulting field
 
 
 
         self.brightness_temp = self.convolve_own(self.brightness_temp, gaussian_kernel)
         if plot:
             cmap = plt.cm.viridis  # Choose a colormap
-            slice = gaussian_kernel[:, 64, :]
+            if self.dim == 3:
+                slice = gaussian_kernel[64, :, :]
+            elif self.dim==2:
+                slice = gaussian_kernel
             # print("min and max")
             # print(np.sum(gaussian_kernel))
             # print(np.min(slice))
@@ -139,11 +140,21 @@ class SKAEffects:
             min_bright_temp = np.min(self.brightness_temp)
             max_bright_temp = np.max(self.brightness_temp)
 
-            im0 = axs[0].imshow(self.brightness_temp_original[0, :, :], origin='lower', cmap='viridis', #vmin=min_bright_temp, vmax=max_bright_temp)
-                                vmin=np.min(self.brightness_temp_original[0, :, :]), vmax=np.max(self.brightness_temp_original[0, :, :]))
-            axs[0].set_xlabel('Pre-Beam Convolution')
+            if self.dim == 3:
+                im0 = axs[0].imshow(self.brightness_temp_original[0, :, :], origin='lower', cmap='viridis', #vmin=min_bright_temp, vmax=max_bright_temp)
+                                    vmin=np.min(self.brightness_temp_original[0, :, :]), vmax=np.max(self.brightness_temp_original[0, :, :]))
 
-            im1 = axs[1].imshow(self.brightness_temp[0, :, :], origin='lower', cmap='viridis', vmin=min_bright_temp, vmax=max_bright_temp)
+                im1 = axs[1].imshow(self.brightness_temp[0, :, :], origin='lower', cmap='viridis', vmin=min_bright_temp, vmax=max_bright_temp)
+            elif self.dim == 2:
+                im0 = axs[0].imshow(self.brightness_temp_original, origin='lower', cmap='viridis',
+                                    # vmin=min_bright_temp, vmax=max_bright_temp)
+                                    vmin=np.min(self.brightness_temp_original),
+                                    vmax=np.max(self.brightness_temp_original))
+
+                im1 = axs[1].imshow(self.brightness_temp, origin='lower', cmap='viridis', vmin=min_bright_temp,
+                                    vmax=max_bright_temp)
+
+            axs[0].set_xlabel('Pre-Beam Convolution')
             axs[1].set_xlabel('Post SKA1-Low Beam Convolution')
 
             #Add colorbars to each plot
@@ -166,7 +177,7 @@ class SKAEffects:
         Delta_nu = simulation frequency resolution (TODO)
         t_int = 1000 hours (TODO)
         """
-        print("Adding thermal noise")
+        # print("Adding thermal noise")
         # print("resolution", self.resolution)
         # Parameters
         mpc = 3.086e+22  # m
@@ -182,12 +193,13 @@ class SKAEffects:
         self.sigma_th = (2.9 * ((1 + self.redshift) / 10) ** 4.6 * np.sqrt(
             (1e6 / obs_freq_width) * (100 / t_int)))  # Equation (13) in Gorce+2021
         # TODO add delta theta: convert to arcmin from rad
-        jax.debug.print("var_th : {}", np.max(self.sigma_th))
+        print("self.sigma_th", self.sigma_th)
+        # jax.debug.print("var_th : {}", np.max(self.sigma_th))
 
         key = jax.random.PRNGKey(0)  # Create a random key
         thermal_noise = self.sigma_th * jax.random.normal(key, np.shape(
             self.brightness_temp))  # Generate a 3x3 array of random normal numbers
-        jax.debug.print("thermal_noise : {}", np.max(thermal_noise))
+        # jax.debug.print("thermal_noise : {}", np.max(thermal_noise))
 
         self.brightness_temp += thermal_noise
         # fig, axs = plt.subplots(1, 2, figsize=(15, 5), constrained_layout=True)
@@ -302,7 +314,7 @@ class SKAEffects:
 
 if __name__ == "__main__":
     import powerbox as pbox
-    from jax_battaglia_full import Dens2bBatt
+    from old_jax_battaglia_full import Dens2bBatt
 
     k_0_fiducial = 0.185
     alpha_fiducial = 0.564
@@ -310,9 +322,9 @@ if __name__ == "__main__":
     midpoint_z_fiducial = 7
     tanh_fiducial = 1
 
-    physical_side_length = 256
-    pixel_side_length = 128
-    z = 6.5
+    physical_side_length = 16
+    pixel_side_length = 16
+    z = 14
     dim = 2
     pb = pbox.PowerBox(
         N=pixel_side_length,  # number of wavenumbers
@@ -325,27 +337,48 @@ if __name__ == "__main__":
     fiducial_params = {"b_0": b_0_fiducial, "alpha": alpha_fiducial, "k_0": k_0_fiducial, "tanh_slope": tanh_fiducial,
                        "avg_z": midpoint_z_fiducial, "redshift_run": 6.5}  # b_0=0.5, alpha=0.2, k_0=0.1)
 
-    plt.imshow(pb.delta_x())
-    plt.colorbar()
-    plt.title("density")
-    plt.savefig("debug_ska/density.png")
-    plt.close()
+
 
     batt_model_instance = Dens2bBatt(pb.delta_x(), z, physical_side_length, physical_side_length/pixel_side_length, flow=True,
                                      free_params=fiducial_params,
                                      apply_ska=False, debug=True)
 
-    plt.imshow(batt_model_instance.temp_brightness)
-    plt.colorbar()
-    plt.title("brightness temp")
-    plt.savefig("debug_ska/default.png")
-    plt.close()
-
-    # debug = SKAEffects(batt_model_instance.temp_brightness,False, z, physical_side_length=physical_side_length)
-    # debug.wedge()
-    # debug = SKAEffects(batt_model_instance.temp_brightness,False, z,physical_side_length=physical_side_length)
-    # debug.beam_convolution()
-    debug = SKAEffects(batt_model_instance.temp_brightness, False, z, physical_side_length=128)
+    debug = SKAEffects(batt_model_instance.temp_brightness, z, physical_side_length=physical_side_length, add_all=True)
     debug.beam_convolution(plot=True)
 
+    if dim == 2:
+        plt.imshow(pb.delta_x())
+        plt.colorbar()
+        plt.title("density")
+        plt.savefig("debug_ska/density.png")
+        plt.close()
 
+        plt.imshow(batt_model_instance.temp_brightness)
+        plt.colorbar()
+        plt.title("brightness temp")
+        plt.savefig("debug_ska/bright_normal.png")
+        plt.close()
+
+        plt.imshow(debug.brightness_temp)
+        plt.colorbar()
+        plt.title("brightness temp")
+        plt.savefig("debug_ska/bright_w_ska.png")
+        plt.close()
+    elif dim == 3:
+        plt.imshow(pb.delta_x()[0,:,:])
+        plt.colorbar()
+        plt.title("density")
+        plt.savefig("debug_ska/density.png")
+        plt.close()
+
+        plt.imshow(batt_model_instance.temp_brightness[0,:,:])
+        plt.colorbar()
+        plt.title("brightness temp")
+        plt.savefig("debug_ska/bright_normal.png")
+        plt.close()
+
+        plt.imshow(debug.brightness_temp[0,:,:])
+        plt.colorbar()
+        plt.title("brightness temp")
+        plt.savefig("debug_ska/bright_w_ska.png")
+        plt.close()

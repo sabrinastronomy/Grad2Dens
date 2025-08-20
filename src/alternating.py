@@ -4,44 +4,44 @@ Created November, 2022
 Written by Sabrina Berger
 """
 import time
-from jax_main import SwitchMinimizer
+from .jax_main import SwitchMinimizer
 import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 import os
 from matplotlib.ticker import MaxNLocator
-from jax_battaglia_full import Dens2bBatt
+from .jax_battaglia_full import Dens2bBatt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
+from .theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
 import argparse
 from scipy.ndimage import gaussian_filter
 from matplotlib import colors
 from scipy.stats import kurtosis, skew, kurtosistest, normaltest
 
-# Set up the argument parser
-parser = argparse.ArgumentParser(description="Run simulation with or without SKA effects")
+# # Set up the argument parser
+# parser = argparse.ArgumentParser(description="Run simulation with or without SKA effects")
+#
+# # Add an argument for ska_effects
+# parser.add_argument(
+#     '--ska_effects',
+#     action='store_true',
+#     help="Enable SKA effects if this flag is present"
+# )
+#
+# parser.add_argument(
+#     '--num_combinations',
+#     type=int,
+#     default=1,
+#     help="Number of combinations we stopped at (default is 1)"
+# )
 
-# Add an argument for ska_effects
-parser.add_argument(
-    '--ska_effects',
-    action='store_true',
-    help="Enable SKA effects if this flag is present"
-)
-
-parser.add_argument(
-    '--num_combinations',
-    type=int,
-    default=1,
-    help="Number of combinations we stopped at (default is 1)"
-)
-
-# Parse the arguments
-args = parser.parse_args()
-
-# Use the argument
-ska_effects = args.ska_effects
-num_combinations_start = args.num_combinations
+# # Parse the arguments
+# args = parser.parse_args()
+#
+# # Use the argument
+# ska_effects = args.ska_effects
+# num_combinations_start = args.num_combinations
 
 
 ### defaults for paper plots
@@ -66,13 +66,10 @@ class InferDens(SwitchMinimizer):
         self.pixel_tracks_neutral = jnp.empty(self.config_params.iter_num_max)
         self.hessian_vals = jnp.empty(self.config_params.iter_num_max)
         super().__init__(config_params, s_field)
-
-
-
         self.labels = []
         self.iter_failed_line_search_arr = []
         if config_params.plot_direc == "":
-            self.perc_ionized = round(len(self.ionized_indices) / self.config_params.side_length**self.config_params.dim, 5)
+            self.perc_ionized = len(self.ionized_indices_flattened) / self.config_params.side_length**self.config_params.dim
             str_free_params = "_".join([f"{key}-{value}" for key, value in self.config_params.free_params.items()])
 
             if config_params.old_prior:
@@ -82,14 +79,15 @@ class InferDens(SwitchMinimizer):
 
 
             if self.truth_field.any() != None and not self.config_params.ska_effects:
-                new_direc = f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/ska_off_full_grid/diff_start_" + new_direc
+                new_direc = f"ska_off_full_grid/diff_start_" + new_direc
             elif self.truth_field.any() != None and self.config_params.ska_effects:
-                new_direc = f"/fred/oz113/sberger/paper_1_density/Grad2Dens/src/ska_on_full_grid/ska_on_diff_start_" + new_direc
+                new_direc = f"ska_on_diff_start_" + new_direc
             try:
                 os.mkdir(new_direc)
                 os.mkdir(new_direc + "/plots")
                 os.mkdir(new_direc + "/npy")
-            except:
+            except Exception as e:
+                print(e)
                 print("directory already exists")
             self.plot_direc = new_direc
             self.config_params.plot_direc = new_direc
@@ -100,8 +98,7 @@ class InferDens(SwitchMinimizer):
         print(self.plot_direc)
         print("Saved config parameters.")
         self.config_params.save_to_file(directory=self.plot_direc)
-
-        if run_optimizer:
+        if self.config_params.run_optimizer:
             self.infer_density_field()
             self.make_1_1_plots()
 
@@ -109,8 +106,6 @@ class InferDens(SwitchMinimizer):
         start_time = time.time()
         batt_model_instance = Dens2bBatt(self.best_field_reshaped, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
         temp_model_brightness = batt_model_instance.temp_brightness
-        print("battaglia run took")
-        print(time.time() - start_time)
 
         root_mse_curr = self.root_mse(self.data, temp_model_brightness)
         return root_mse_curr
@@ -137,15 +132,15 @@ class InferDens(SwitchMinimizer):
                     self.mask_ionized = False
                 ####
                 print("Initial run")
-                if self.likelihood_off:
-                    print("Likelihood off")
-                else:
-                    print("Likelihood ON")
-
-                if self.prior_off:
-                    print("Prior off")
-                else:
-                    print("Prior ON")
+                # if self.likelihood_off:
+                #     print("Likelihood off")
+                # else:
+                #     print("Likelihood ON")
+                #
+                # if self.prior_off:
+                #     print("Prior off")
+                # else:
+                #     print("Prior ON")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=False, iter_num_big=iter_num_big)
 
                 # self.check_field(self.s_field_original, "starting field", show=False, save=True,
@@ -193,14 +188,6 @@ class InferDens(SwitchMinimizer):
             self.labels.append(self.plot_title) # saving configuration of each iteration in list
             np.save(self.plot_direc + f"/npy/labels.npy", self.labels)
             np.save(self.plot_direc + f"/npy/iter_failed_line_search_arr.npy", self.iter_failed_line_search_arr)
-            print("iter num big")
-            print(iter_num_big)
-            print("likelihood off")
-            print(self.likelihood_off)
-            print("prior_off")
-            print(self.prior_off)
-            print("mask ionized")
-            print(self.mask_ionized)
 
             rest_num += 1 # INCREASE REST NUM ONE
 
@@ -322,8 +309,7 @@ class InferDens(SwitchMinimizer):
         axes_pspec.fill_between(kvals, lower_bound, upper_bound, alpha=0.3, color="red")
         axes_pspec.loglog(kvals, pspec_normal, label=f"Best Field", alpha=0.5, color="blue")
         difference = np.sqrt((pspec_normal - pspec_truth)**2)
-        print("pspec differences")
-        print(difference)
+
         # Residual plot
         # frame2 = fig1.add_axes((.1, .1, .8, .2))
         axes_residual.loglog(kvals, difference, color="black", alpha=1)
@@ -348,7 +334,7 @@ class InferDens(SwitchMinimizer):
             k_vertical = np.sqrt(k_vertical ** 2 + k_vertical ** 2)
         elif self.config_params.dim == 3:
             k_vertical = np.sqrt(k_vertical ** 2 + k_vertical ** 2 + k_vertical ** 2)
-        axes_pspec.vlines(x=k_vertical, ymin=ymin_pspec, ymax=ymax_pspec, color="black", linewidth=2, label="4*sigma*sqrt(ndim)")
+        # axes_pspec.vlines(x=k_vertical, ymin=ymin_pspec, ymax=ymax_pspec, color="black", linewidth=2, label="4*sigma*sqrt(ndim)")
         axes_residual.vlines(x=k_vertical, ymin=ymin_residual, ymax=ymax_residual, color="black", linewidth=2)
         axes_pspec.legend()
 
@@ -403,8 +389,8 @@ class InferDens(SwitchMinimizer):
                         continue
                     else:
                         im = axes[i][j].imshow(
-                            self.truth_field, 
-                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None, 
+                            self.truth_field,
+                            norm=matplotlib.colors.SymLogNorm(linthresh=0.01) if log else None,
                             vmin=-1, vmax=1
                         )
                         t = axes[i][j].text(20, self.config_params.side_length - 10, "Truth Field", color="black", weight='bold')
@@ -413,7 +399,7 @@ class InferDens(SwitchMinimizer):
 
                         # Data field plot
                         im = data_axes[i][j].imshow(
-                            self.data, 
+                            self.data,
                             norm=matplotlib.colors.SymLogNorm(linthresh=0.01, vmin=-1, vmax=jnp.max(self.data)) if log else None,
                             cmap="oranges"
                         )
@@ -989,7 +975,7 @@ class ConfigParam:
                 file.write(f"{key}: {value}\n")
 
 # Print the result to verify
-print(f'SKA Effects Enabled: {ska_effects}')
+# print(f'SKA Effects Enabled: {ska_effects}')
 
 k_0_fiducial = 0.185 * 0.676 # changing from Mpc/h to Mpc
 alpha_fiducial = 0.564

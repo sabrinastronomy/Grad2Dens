@@ -29,6 +29,33 @@ matplotlib.rcParams.update({'font.size': 12})
 # tau = 0.054 # thomson/reionization optical depth
 # z_max = 15 # highest z value to calculate pspec at
 
+def CROSS_circular_spec_normal(field_1, field_2, nbins, resolution, area):
+    """
+    2D field
+    square before averaging (histogramming)
+    RESOLUTION IS [MPC/PIXEL]
+    """
+    curr_side_length = np.shape(field_1)[0]
+    fft_data_1 = np.fft.fftn(field_1)
+    fft_data_2 = np.fft.fftn(field_2)
+
+    fft_data_squared = np.abs(fft_data_1*fft_data_2)
+    k_arr = np.fft.fftfreq(curr_side_length) * 2 * np.pi
+    k_arr *= 1 / resolution # convert from pixel^-1 to Mpc^-1
+    k1, k2 = np.meshgrid(k_arr, k_arr) # 3D!! meshgrid :)
+    k_mag_full = np.sqrt(k1 ** 2 + k2 ** 2)
+
+    counts, bin_edges = np.histogram(k_mag_full, nbins)
+    binned_power, _ = np.histogram(k_mag_full, nbins, weights=fft_data_squared)
+
+    bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
+                 np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
+    pspec = binned_power / counts # average power in each bin
+    # print(f"resolution, {resolution} mpc/pixel") # pixels/mpc
+    pspec /= area # pixels^6 to pixels^3
+    pspec *= resolution**2 # converting form pixels^3 to Mpc^3
+    return counts, pspec, bin_means
+
 def circular_spec_normal(field, nbins, resolution, area):
     """
     2D field
@@ -49,7 +76,7 @@ def circular_spec_normal(field, nbins, resolution, area):
     bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
                  np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
     pspec = binned_power / counts # average power in each bin
-    print(f"resolution, {resolution} mpc/pixel") # pixels/mpc
+    # print(f"resolution, {resolution} mpc/pixel") # pixels/mpc
     pspec /= area # pixels^6 to pixels^3
     pspec *= resolution**2 # converting form pixels^3 to Mpc^3
     return counts, pspec, bin_means
@@ -73,7 +100,7 @@ def after_circular_spec_normal(field, nbins, resolution, area):
     bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
                  np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
     pspec = binned_power**2 / counts # average power in each bin
-    print(f"resolution, {resolution} mpc/pixel") # pixels/mpc
+    # print(f"resolution, {resolution} mpc/pixel") # pixels/mpc
     pspec /= area # pixels^6 to pixels^3
     pspec *= resolution**2 # converting form pixels^3 to Mpc^3
     return counts, pspec, bin_means
@@ -98,7 +125,7 @@ def spherical_p_spec_normal(field, nbins, resolution, volume):
     bin_means = (np.histogram(k_mag_full, nbins, weights=k_mag_full)[0] /
                  np.histogram(k_mag_full, nbins)[0]) # mean k value in each bin
     pspec = binned_power / counts # average power in each bin
-    print(f"resolution, {resolution} mpc/pixel") # mpc/pixels
+    # print(f"resolution, {resolution} mpc/pixel") # mpc/pixels
     pspec /= volume # pixels^6 to pixels^3
     pspec *= resolution**3 # converting form pixels^3 to Mpc^3
     return counts, pspec, bin_means
@@ -155,9 +182,9 @@ def get_truth_matter_pspec(kmax, side_length, z, dim):
         var2=model.Transfer_nonu,
     )
     if dim == 2:
-        pspec_k_func = lambda k: interp_l.P(z, k) / side_length
+        pspec_k_func = lambda k: interp_l.P(z, k, grid=False) / side_length
     elif dim == 3:
-        pspec_k_func = lambda k: interp_l.P(z, k)
+        pspec_k_func = lambda k: interp_l.P(z, k, grid=False)
     elif dim != 3:
         print("# of dimensions not supported.")
         exit()

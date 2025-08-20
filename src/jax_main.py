@@ -7,24 +7,18 @@ independent_only_jax function written by Adrian Liu and Adélie Gorce
 """
 
 # import jax related packages
-from ska_effects import SKAEffects
+from .ska_effects import SKAEffects
 import os
 import jax
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 from jax import config
-# from jax.experimental.host_callback import id_print, id_tap  # this is a way to print in Jax when things are preself.compiledd
-from jax.scipy.optimize import \
-    minimize as minimize_jax  # this is the bread and butter algorithm of this work, minimization using Jax optimized gradients
-# from jax.example_libraries import optimizers as jaxopt
 import jaxopt
-import theory_matter_ps
-from theory_matter_ps import spherical_p_spec_normal, circular_spec_normal
+from .theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
-from jax_battaglia_full import Dens2bBatt
+from .jax_battaglia_full import Dens2bBatt
 import matplotlib
-from matplotlib.colors import SymLogNorm
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values
 config.update('jax_disable_jit', False) # this turns off jit compiling which is helpful for debugging
@@ -85,13 +79,12 @@ class SwitchMinimizer:
 
         ## new stuff
         self.resolution = self.config_params.physical_side_length / self.config_params.side_length # physical side length / number of pixels [Mpc/pixel]
-        print("resolution ", self.resolution)
         self.area = self.config_params.side_length ** 2
         self.volume = self.config_params.side_length**3
         # kmax = 2 * jnp.pi / self.physical_side_length * (self.config_params.side_length / 2)
         kmax = 50
         # get camb pspec no matter what
-        self.pspec_true = theory_matter_ps.get_truth_matter_pspec(kmax, self.config_params.physical_side_length, self.config_params.z, self.config_params.dim)
+        self.pspec_true = get_truth_matter_pspec(kmax, self.config_params.physical_side_length, self.config_params.z, self.config_params.dim)
         ### get a tuple with the dimensions of the field
         self.size = []
         for i in range(self.config_params.dim):
@@ -123,15 +116,14 @@ class SwitchMinimizer:
             # truth field is just unbiased version made with pbox
             self.truth_field = jnp.asarray(pb_data_unbiased_field)
             assert self.truth_field.ndim == self.config_params.dim
-            print("STANDARD DEVIATION OF TRUTH FIELD")
-            print(jnp.std(self.truth_field))
 
             ### 2) create data
             self.data = self.bias_field(self.truth_field)
+            self.raw_data = self.data.copy()
             assert(self.data.ndim == self.config_params.dim)
 
             if self.config_params.ska_effects:
-                self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
+                self.ska = SKAEffects(self.data, self.config_params.z, self.config_params.physical_side_length)
                 self.data = self.ska.brightness_temp
                 assert (self.data.ndim == self.config_params.dim)
 
@@ -144,7 +136,7 @@ class SwitchMinimizer:
             print("NOT USING 21cmFAST DATA")
 
             if self.config_params.ska_effects:
-                self.ska = SKAEffects(self.data, True, self.config_params.z, self.config_params.physical_side_length)
+                self.ska = SKAEffects(self.data, self.config_params.z, self.config_params.physical_side_length)
                 self.data = self.ska.brightness_temp
             # print("Not yet implemented")
             # exit()
@@ -156,7 +148,7 @@ class SwitchMinimizer:
         # calculating both regardless of prior
         if self.config_params.use_truth_mm:  # use theory matter power spectrum in prior
             if self.config_params.old_prior:
-                self.kvals_truth, self.pspec_2d_true = theory_matter_ps.convert_pspec_2_2D(self.pspec_true,
+                self.kvals_truth, self.pspec_2d_true = convert_pspec_2_2D(self.pspec_true,
                                                                                            self.config_params.side_length,
                                                                                            self.config_params.z)
                 self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
@@ -201,7 +193,7 @@ class SwitchMinimizer:
 
         ##############################################################################################################
         # print("Ionized pixels if < 15")
-        ionized_threshold = 5
+        ionized_threshold = 16
         self.ionized_indices = jnp.argwhere(self.data < ionized_threshold)
         self.neutral_indices = jnp.argwhere(self.data > ionized_threshold)
 
@@ -221,13 +213,17 @@ class SwitchMinimizer:
             print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
             self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
-        # self.rms_Tb = jnp.std(self.data)
+        self.rms_Tb = 0.1
         if self.config_params.ska_effects and not self.config_params.cov_matrix_data:
-            self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
-            self.stdev_Tb = jnp.std(self.data)
+            try:
+                self.N_diag = self.ska.sigma_th ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+            except:
+                self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+
+            # self.rms_Tb = jnp.std(self.data)
+            # self.rms_Tb = 1
         elif not self.config_params.ska_effects and not self.config_params.cov_matrix_data:
-            self.stdev_Tb = jnp.std(self.data)
-            self.N_diag = self.stdev_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
+            self.N_diag = self.rms_Tb ** 2 * jnp.ones((self.config_params.side_length ** self.config_params.dim)) # using thermal noise from SKA effedcts
         elif self.config_params.cov_matrix_data: # need both ska_effects and cov_matrix_data to be on
             self.generate_data_cov()
         ###############################################################################################################
@@ -266,8 +262,6 @@ class SwitchMinimizer:
             self.data = self.normalize(self.data)
 
         ## Dimensions checks
-        print("length of data")
-        print(self.data.ndim)
         assert (self.data.ndim == self.config_params.dim)
         assert (len(self.s_field) == self.config_params.side_length**self.config_params.dim)
         assert (self.truth_field.ndim == self.config_params.dim)
@@ -279,7 +273,7 @@ class SwitchMinimizer:
         diff = max_field - min_field
         return (2 * (field - min_field) / diff) - 1
 
-    def generate_data_cov(self, samples=100000):
+    def generate_data_cov(self, samples=20000):
         """
         Generate data covariance
         """
@@ -306,7 +300,7 @@ class SwitchMinimizer:
             # Generate a random integer between 0 and 1000
             for i in range(samples): # generate n draws of ND data
                 key, subkey = jax.random.split(key)  # Update key to ensure new randomness
-                random_int = jax.random.randint(subkey, shape=(), minval=0, maxval=1e6)
+                random_int = jax.random.randint(subkey, shape=(), minval=0, maxval=4*samples)
                 pb_data_unbiased_field = self.create_better_normal_field(seed=random_int).delta_x()
                 jax.debug.print(str(pb_data_unbiased_field[0,0]))
                 # truth field is just unbiased version made with pbox
@@ -342,6 +336,7 @@ class SwitchMinimizer:
             plt.close()
 
         self.check_cov_matrix_convergence()
+        exit()
 
     def check_cov_matrix_convergence(self):
         """
@@ -485,22 +480,14 @@ class SwitchMinimizer:
 
         #### get likelihood for all cases #############################################################################
         if self.config_params.cov_matrix_data:
-            # log L = (d-m)^T C_21^-1 (d-m)
-            # discrepancy = discrepancy.flatten().reshape(-1, 1) # ensuring column vector (nx1)
-            # field_likelihood = discrepancy.T @ self.data_cov_inv
-            # likelihood = field_likelihood @ discrepancy # (1xn) (nxn) (nx1)
-            # jax.debug.print("Likelihood: {}", likelihood)
-
-            # log L = (m)^T C_21^-1 (m)
-            candidate_field_reshaped = candidate_field.flatten().reshape(-1, 1) # ensuring column vector (nx1)
-            half_likelihood = candidate_field_reshaped.T @ self.data_cov_inv
-            likelihood = half_likelihood @ candidate_field_reshaped # (1xn) (nxn) (nx1)
+            discrepancy = discrepancy.flatten().reshape(-1, 1) # ensuring column vector (nx1)
+            field_likelihood = jax.numpy.matmul(discrepancy.T, self.data_cov_inv)
+            likelihood = jax.numpy.matmul(field_likelihood, discrepancy) # (1xn) (nxn) (nx1)
             jax.debug.print("Likelihood: {}", likelihood)
-
         else:
-            likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
+            field_likelihood = (discrepancy.flatten() ** 2) * 1. / self.N_diag
 
-        likelihood = np.sum(likelihood)
+        likelihood = np.sum(field_likelihood)
         ###############################################################################################################
         # want circular/spherical pspec regardless of which prior we use
         if self.config_params.dim == 2:
@@ -531,7 +518,7 @@ class SwitchMinimizer:
             imag_prior = jnp.dot(fourier_nums_imag ** 2,
                                  2 / self.pspec_indep_nums_im)  # Half variance for imag
 
-            prior = (real_prior + imag_prior) / self.config_params.side_length**self.dim
+            prior = (real_prior + imag_prior) / self.config_params.side_length**self.config_params.dim
         elif self.config_params.new_prior:
             sigma = counts ** 2
             prior = jnp.sum(pspec_difference**2/sigma)
@@ -611,8 +598,6 @@ class SwitchMinimizer:
         :param field -- field being converted
         :param param (Default: None) -- bias upon which to bias current field
         """
-        print("SKA Effects")
-        print(self.config_params.ska_effects)
         batt_model_instance = Dens2bBatt(field, resolution=self.resolution, set_z=self.config_params.z, physical_side_length=self.config_params.physical_side_length, flow=True, free_params=self.config_params.free_params, apply_ska=self.config_params.ska_effects)
         # get neutral versus ionized count ############################################################################
         self.neutral_count = jnp.count_nonzero(batt_model_instance.X_HI)
@@ -701,7 +686,7 @@ class SwitchMinimizer:
         plt.savefig(f"{self.config_params.plot_direc}/plots/param.png")
         plt.close()
 
-        if self.dim == 2:
+        if self.config_params.dim == 2:
             value_all_reshaped = np.reshape(self.value_all[:, :self.iter_num],
                                             (self.config_params.side_length, self.config_params.side_length, self.iter_num))
             likelihood_all_reshaped = np.reshape(self.likelihood_indiv_all[:, :self.iter_num],
@@ -726,7 +711,7 @@ class SwitchMinimizer:
                     plt.close()
 
         else:
-            for i in range(self.config_params.side_length ** self.dim):
+            for i in range(self.config_params.side_length ** self.config_params.dim):
                 fig, ax = plt.subplots(1, 2)
                 ax[0].plot(self.value_all[i, :self.iter_num])
                 ax[0].set_xlabel("num iterations")
