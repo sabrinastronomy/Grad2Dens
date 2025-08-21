@@ -7,17 +7,28 @@ independent_only_jax function written by Adrian Liu and Adélie Gorce
 """
 
 # import jax related packages
-from .ska_effects import SKAEffects
+try:
+    from .ska_effects import SKAEffects
+except:
+    from ska_effects import SKAEffects
 import os
 import jax
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 from jax import config
 import jaxopt
-from .theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
+try:
+    from .theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
+except:
+    from theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
+
 import matplotlib.pyplot as plt
 import powerbox as pbox
 import numpy as np
-from .jax_battaglia_full import Dens2bBatt
+try:
+    from .jax_battaglia_full import Dens2bBatt
+except:
+    from jax_battaglia_full import Dens2bBatt
+
 import matplotlib
 
 config.update("jax_enable_x64", True)  # this enables higher precision than default for Jax values

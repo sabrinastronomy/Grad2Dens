@@ -21,8 +21,8 @@ def bias2zre_2d(dens, L, astro_params, zre):
     kbox = jnp.sqrt(jnp.power(k_x, 2)[:, None] + jnp.power(k_x, 2))
 
     # return kbox
-    b0, logk0, alpha = astro_params
-    k0 = jnp.power(10, logk0)
+    b0, k0, alpha = astro_params
+    # k0 = jnp.power(10, logk0)
     kbox_div = jnp.where(k0 > 1e-4, jnp.divide(kbox, k0), 0.)
     bmz = b0 / jnp.power(1. + kbox_div, alpha)
     zz_box = delta_k * bmz
@@ -43,7 +43,7 @@ def bias2brightness_2d(
     OMb, OMm, h = cosmo_params
     zre_box = bias2zre_2d(dens, L, astro_params, zre)
     xHI_box = (jnp.tanh((-zre_box+z)*zslope) + 1.)/2
-
+    print(zslope)
     cosmo_prefac = 27. * OMb * h**2 / 0.023 *\
         jnp.sqrt(0.15/OMm/h**2) * jnp.sqrt((1.+z)/10.)
     dTb_box = cosmo_prefac * xHI_box * (1. + dens)

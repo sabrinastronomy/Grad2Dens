@@ -4,16 +4,24 @@ Created November, 2022
 Written by Sabrina Berger
 """
 import time
-from .jax_main import SwitchMinimizer
+try:
+    from .jax_main import SwitchMinimizer
+except:
+    from jax_main import SwitchMinimizer
+
 import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
 import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionality/syntax is equivalent to normal numpy
 import os
 from matplotlib.ticker import MaxNLocator
-from .jax_battaglia_full import Dens2bBatt
+try:
+    from .jax_battaglia_full import Dens2bBatt
+    from .theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
+except:
+    from jax_battaglia_full import Dens2bBatt
+    from theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from .theory_matter_ps import spherical_p_spec_normal, after_spherical_p_spec_normal, circular_spec_normal, after_circular_spec_normal
 import argparse
 from scipy.ndimage import gaussian_filter
 from matplotlib import colors

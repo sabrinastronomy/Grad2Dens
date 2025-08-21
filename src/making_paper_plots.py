@@ -9,7 +9,7 @@ from scipy.interpolate import interp1d
 from scipy.stats import kurtosis, skew, kurtosistest, normaltest
 import jax
 # Local modules
-from src import alternating, jax_battaglia_full, theory_matter_ps, jax_main
+import alternating, jax_battaglia_full, theory_matter_ps, jax_main
 
 ### defaults for paper plots
 import matplotlib

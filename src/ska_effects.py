@@ -314,7 +314,7 @@ class SKAEffects:
 
 if __name__ == "__main__":
     import powerbox as pbox
-    from old_jax_battaglia_full import Dens2bBatt
+    from jax_battaglia_full import Dens2bBatt
 
     k_0_fiducial = 0.185
     alpha_fiducial = 0.564
