@@ -1,4 +1,4 @@
-# MAP Density Field Inference (JAX + NumPyro)
+# Density Field Inference (JAX + NumPyro)
 
 Infrastructure to infer Maximum A Posteriori (MAP) estimates **and perform full Bayesian inference** of the **matter density field** from 21 cm brightness-temperature maps using:
 
