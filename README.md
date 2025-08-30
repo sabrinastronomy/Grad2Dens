@@ -1,6 +1,4 @@
 ![ska_2024](https://github.com/user-attachments/assets/0dd5771b-631d-477c-9fd3-da2a31b33780)# Density Field Inference (JAX + NumPyro)
-![Overview of MAP/HMC Inference](/figures/ska.jpg)
-
 Infrastructure to infer Maximum A Posteriori (MAP) estimates **and perform full Bayesian inference** of the **matter density field** from 21 cm brightness-temperature maps using:
 
 * a differentiable forward model based on **Battaglia et al. (2013)**,
