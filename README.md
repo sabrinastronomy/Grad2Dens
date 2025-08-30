@@ -7,6 +7,7 @@ Infrastructure to infer Maximum A Posteriori (MAP) estimates **and perform full 
 * **Hamiltonian Monte Carlo (HMC)** sampling via **NumPyro**.
 
 > Author: **Sabrina Berger** · Started: **Nov 2022**
+> Contributors: Adélie Gorce and Adrian Liu
 > Language: Python (tested with **3.9**) · Backend: **JAX**, **NumPyro**
 
 ---
