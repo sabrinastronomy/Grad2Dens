@@ -40,6 +40,11 @@ The package reconstructs the latent matter density field $s$ by:
 * **MAP inference:** minimizing a posterior objective
 * **Bayesian inference:** sampling the full posterior using NumPyro’s HMC/NUTS
 
+## Don't know what an HMC even is? See how to use HMC to fit a straight line.
+
+- [HMC Introduction: Fitting a Straight Line with HMC](https://github.com/sabrinastronomy/HMC_Introduction) – A hands-on Jupyter notebook tutorial demonstrating how Hamiltonian Monte Carlo can be used to fit a line (i.e. `y = m x + b`), with visuals and explanations.
+
+
 The forward model $f$ maps density to **brightness temperature** via the Battaglia+2013 prescription (class `Dens2bBatt`).
 
 ## Features
