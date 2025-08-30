@@ -217,9 +217,73 @@ def bayesian_model_mask_neutral(obs=None, ionized_mask=ionized_mask):
 
 ## API Reference
 
-### `ConfigParam`
+### ConfigParam
 
-*(unchanged, see previous section)*
+Main configuration container for inference runs.
+
+Key fields:
+
+ska_effects (bool) — apply SKA-like instrument model.
+
+free_params (dict) — astrophysical parameters (e.g. {"b_0":..., "alpha":...}).
+
+z (float) — redshift.
+
+truth_field (ndarray) — ground truth density field (optional).
+
+data (ndarray) — brightness temperature field.
+
+num_bins (int) — number of k-bins for P(k).
+
+nothing_off (bool) — toggle likelihood/prior switching.
+
+plot_direc (str) — directory to save plots.
+
+side_length (int) — box side length in pixels.
+
+physical_side_length (float) — physical box size (Mpc).
+
+dim (int) — dimensionality (2 or 3).
+
+iter_num_max (int) — maximum iterations.
+
+rest_num_max (int) — max restarts.
+
+noise_off (bool) — disable noise if True.
+
+run_optimizer (bool) — whether to run MAP optimizer automatically.
+
+mse_plot_on (bool) — toggle MSE plots.
+
+weighted_prior (float/None) — weight factor for prior.
+
+new_prior (bool) — use binned P(k) prior.
+
+old_prior (bool) — use Fourier-mode prior.
+
+verbose (bool) — verbose logging.
+
+debug (bool) — debug mode.
+
+use_truth_mm (bool) — use theory matter PS in prior.
+
+save_prior_likelihood_arr (bool) — save arrays of prior/likelihood.
+
+seed (int) — RNG seed.
+
+create_instance (bool) — if True, skip optimizer.
+
+use_matter_pspec_starting_field (bool) — initialize with CAMB P(k).
+
+normalize_everything (bool) — normalize fields to [-1,1].
+
+cov_matrix_data (bool) — use covariance matrix likelihood.
+
+know_neutral_pixels (bool) — treat neutral pixels as known.
+
+ionized_threshold (float/None) — threshold for ionized mask.
+
+Use save_to_file() to export all parameters to text in the run directory.
 
 ### `SwitchMinimizer`
 
