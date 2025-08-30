@@ -1,5 +1,7 @@
-![ska_2024](https://github.com/user-attachments/assets/0dd5771b-631d-477c-9fd3-da2a31b33780)# Density Field Inference (JAX + NumPyro)
+# Density Field Inference (JAX + NumPyro)
 Infrastructure to infer Maximum A Posteriori (MAP) estimates **and perform full Bayesian inference** of the **matter density field** from 21 cm brightness-temperature maps using:
+
+![ska_2024](https://github.com/user-attachments/assets/0dd5771b-631d-477c-9fd3-da2a31b33780)
 
 * a differentiable forward model based on **Battaglia et al. (2013)**,
 * gradient-based optimization with **jaxopt**, and
