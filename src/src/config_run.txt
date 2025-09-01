@@ -1,0 +1,27 @@
+ska_effects: False
+free_params: {'b_0': 0.593, 'alpha': 0.564, 'k_0': 0.12506, 'tanh_slope': 2, 'avg_z': 7, 'redshift_run': 8.5}
+z: 8.5
+truth_field: []
+data: []
+num_bins: 8
+nothing_off: True
+plot_direc: 
+side_length: 16
+physical_side_length: 16
+dim: 3
+iter_num_max: 1
+rest_num_max: 0
+noise_off: True
+save_posterior_values: False
+run_optimizer: True
+mse_plot_on: False
+weighted_prior: None
+new_prior: True
+old_prior: False
+verbose: False
+debug: False
+use_truth_mm: False
+save_prior_likelihood_arr: False
+seed: 1
+create_instance: False
+use_matter_pspec_starting_field: True
