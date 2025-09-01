@@ -140,15 +140,19 @@ class InferDens(SwitchMinimizer):
                     self.mask_ionized = False
                 ####
                 print("Initial run")
-                # if self.likelihood_off:
-                #     print("Likelihood off")
-                # else:
-                #     print("Likelihood ON")
-                #
-                # if self.prior_off:
-                #     print("Prior off")
-                # else:
-                #     print("Prior ON")
+                if not self.config_params.nothing_off and self.config_params.know_neutral_pixels:
+                    self.mask_ionized = True
+                    self.prior_off = True
+                    self.likelihood_off = False
+                if self.likelihood_off:
+                    print("Likelihood off")
+                else:
+                    print("Likelihood ON")
+
+                if self.prior_off:
+                    print("Prior off")
+                else:
+                    print("Prior ON")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=False, iter_num_big=iter_num_big)
 
                 # self.check_field(self.s_field_original, "starting field", show=False, save=True,
@@ -173,7 +177,20 @@ class InferDens(SwitchMinimizer):
                     # Never masking when both are on!!
                     self.mask_ionized = False
 
+                if not self.config_params.nothing_off and self.config_params.know_neutral_pixels:
+                    self.mask_ionized = True
+                    self.prior_off = False
+                    self.likelihood_off = True
                 print("Subsequent run")
+                if self.likelihood_off:
+                    print("Likelihood off")
+                else:
+                    print("Likelihood ON")
+
+                if self.prior_off:
+                    print("Prior off")
+                else:
+                    print("Prior ON")
                 self.run(likelihood_off=self.likelihood_off, prior_off=self.prior_off, mask_ionized=self.mask_ionized, use_old_field=True, iter_num_big=iter_num_big)
 
             print("--------------------------------------------------------")
@@ -606,16 +623,16 @@ class InferDens(SwitchMinimizer):
         ax_mse.legend()
         fig_mse.savefig(f"compare_mse_post_{self.config_params.z}.png")
 
-    def plot_5_panel(self, slice_idx=10):
+    def plot_5_panel(self, shared_axis=True, slice_idx=10):
         print("self.size[-1]")
         print(self.size[-1])
         cube_height = self.size[-1]
         if cube_height < 20:
             for i in range(cube_height):
-                self.plot_5_panel_slice(slice_idx=i)
+                self.plot_5_panel_slice(slice_idx=i, shared_axis=shared_axis)
         else:
-            self.plot_5_panel_slice(slice_idx=slice_idx)
-            self.plot_5_panel_slice(slice_idx=slice_idx, shared_axis=True)
+            self.plot_5_panel_slice(slice_idx=slice_idx, shared_axis=shared_axis)
+            # self.plot_5_panel_slice(slice_idx=slice_idx, shared_axis=False)
 
 
     def plot_5_panel_slice(self, slice_idx, shared_axis=False):
@@ -626,8 +643,11 @@ class InferDens(SwitchMinimizer):
 
         residual = self.truth_field - self.best_field_reshaped
 
-        norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
-                                       vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+        # norm_shared = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=min(np.min(self.best_field_reshaped), np.min(self.truth_field)),
+        #                                vmax=max(np.max(self.best_field_reshaped), np.max(self.truth_field)))
+
+        min_density = min(np.min(self.best_field_reshaped), np.min(self.truth_field))
+        max_density = max(np.max(self.best_field_reshaped), np.max(self.truth_field))
 
         norm_shared_residual = colors.SymLogNorm(linthresh=0.03, linscale=0.03, vmin=np.min(residual),
                                        vmax=np.max(residual))
@@ -662,23 +682,37 @@ class InferDens(SwitchMinimizer):
         skew_best = skew(self.best_field_reshaped.flatten())
         skew_truth = skew(self.truth_field.flatten())
 
+        print(f"Best: skew = {skew_best:.3e}, kurt = {kurt_best:.3e}")
+        print(f"Truth: skew = {skew_truth:.3e}, kurt = {kurt_truth:.3e}")
 
         # Plotting Inferred density
         if shared_axis:
-            im2 = ax2.imshow(best_field_slice, norm=norm_shared)
+            im2 = ax2.imshow(best_field_slice, vmin=min_density, vmax=max_density)
+            ax2.set_aspect("equal")
+
         else:
             im2 = ax2.imshow(best_field_slice) #, norm=norm_shared)
 
-        ax2.set_title(f"Inferred Density skew = {skew_best:.2e}, kurt = {kurt_best:.2e}) " + f"(Slice {slice_idx})" if self.data.ndim == 3 else "")
+        title = f"Inferred Density" # skew = {skew_best:.2e}, kurt = {kurt_best:.2e}"
+        if self.data.ndim == 3:
+            title += f" (Slice {slice_idx})"
+        ax2.set_title(title)
+
         ax2.set_xlabel("Pixel #")
 
         # Plotting Truth
         if shared_axis:
-            im3 = ax3.imshow(truth_field_slice, norm=norm_shared)
+            im3 = ax3.imshow(truth_field_slice, vmin=min_density, vmax=max_density)
+            ax3.set_aspect("equal")
+
         else:
             im3 = ax3.imshow(truth_field_slice)
 
-        ax3.set_title(f"Truth skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}) " + f"(Slice {slice_idx})" if self.truth_field.ndim == 3 else "")
+        title = f"Truth" # skew = {skew_truth:.2e}, kurt = {kurt_truth:.2e}"
+        if self.truth_field.ndim == 3:
+            title += f" (Slice {slice_idx})"
+        ax3.set_title(title)
+
         ax3.set_xlabel("Pixel #")
 
         # Plotting Residual (truth-best)
@@ -720,9 +754,9 @@ class InferDens(SwitchMinimizer):
         fig.tight_layout()
         ## getting plot title
         if self.config_params.noise_off:
-            save_plot_title = f"3_panel_z_{self.config_params.z}_no_noise_.png"
+            save_plot_title = f"5_panel_z_{self.config_params.z}_no_noise_.png"
         else:
-            save_plot_title = f"3_panel_z_{self.config_params.z}_w_noise_.png"
+            save_plot_title = f"5_panel_z_{self.config_params.z}_w_noise_.png"
 
         if shared_axis:
             save_plot_title = f"shared_axis_{save_plot_title}"
@@ -920,7 +954,8 @@ class ConfigParam:
                  run_optimizer=False, mse_plot_on=False,
                  weighted_prior=None, new_prior=False, old_prior=False, verbose=False,
                  debug=False, use_truth_mm=False, save_prior_likelihood_arr=False, seed=1010,
-                 create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False, cov_matrix_data=True):
+                 create_instance=False, use_matter_pspec_starting_field=False, normalize_everything=False,
+                 cov_matrix_data=True, know_neutral_pixels=False, ionized_threshold=None):
         """
         :param free_params - dictionary with free parameters to use
         :param z - the redshift you would like to create your density field at
@@ -943,6 +978,7 @@ class ConfigParam:
         :param use_matter_pspec_starting_field (Default: False) - start field with a power spectrum matching truth from CAMB
         :param normalize_everything - normalize the entire field
         :param cov_matrix_data - use cov matrix, can only work in 2D because of memory issues
+        :param know_neutral_pixels - assume you know neutral pixels through analytic inversion of Battaglia+2013 model
 
         """
         self.ska_effects = ska_effects
@@ -973,6 +1009,8 @@ class ConfigParam:
         self.use_matter_pspec_starting_field = use_matter_pspec_starting_field
         self.normalize_everything = normalize_everything
         self.cov_matrix_data = cov_matrix_data
+        self.know_neutral_pixels = know_neutral_pixels
+        self.ionized_threshold = ionized_threshold
         if self.cov_matrix_data:
             assert self.dim == 2
         assert(self.new_prior != self.old_prior)

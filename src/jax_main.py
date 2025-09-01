@@ -17,9 +17,9 @@ import jax.numpy as jnp  # use jnp for jax numpy, note that not all functionalit
 from jax import config
 import jaxopt
 try:
-    from .theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
+    from .theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec, convert_pspec_1D_to_2D
 except:
-    from theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec
+    from theory_matter_ps import spherical_p_spec_normal, circular_spec_normal, get_truth_matter_pspec, convert_pspec_1D_to_2D
 
 import matplotlib.pyplot as plt
 import powerbox as pbox
@@ -159,13 +159,16 @@ class SwitchMinimizer:
         # calculating both regardless of prior
         if self.config_params.use_truth_mm:  # use theory matter power spectrum in prior
             if self.config_params.old_prior:
-                self.kvals_truth, self.pspec_2d_true = convert_pspec_2_2D(self.pspec_true,
+                # truth_pspec_realization = self.create_better_normal_field(0).delta_x()
+                self.kvals_truth, self.pspec_2d_true = convert_pspec_1D_to_2D(self.pspec_true,
                                                                                            self.config_params.side_length,
-                                                                                           self.config_params.z)
-                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(
-                    self.pspec_2d_true + 1j * self.pspec_2d_true)
+                                                                                           self.resolution)
+                # realization_fourier_box = self.fft_jax(truth_pspec_realization)
+                # pspec_real_box = jnp.abs(realization_fourier_box) ** 2
+                # pspec_real_box = jnp.load("/Users/sabrinaberger/Current Research Local/CosmicDawnOffline/hmc_sabrina/src/pbox_best.npy")
+                # self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(pspec_real_box + 1j * pspec_real_box)
 
-
+                self.pspec_indep_nums_re, self.pspec_indep_nums_im = self.independent_only_jax(self.pspec_2d_true + 1j * self.pspec_2d_true)
 
         else:  # use individual realization of a field's power spectrum in prior
             if self.config_params.old_prior:
@@ -204,18 +207,34 @@ class SwitchMinimizer:
 
         ##############################################################################################################
         # print("Ionized pixels if < 15")
-        ionized_threshold = 16
-        self.ionized_indices = jnp.argwhere(self.data < ionized_threshold)
-        self.neutral_indices = jnp.argwhere(self.data > ionized_threshold)
+        # Below we get the ionized threshold, but taking np.median of the data at the midpoint of reionization
 
-        self.ionized_indices_flattened = jnp.argwhere(self.data.flatten() < ionized_threshold).flatten()
-        self.neutral_indices_flattened = jnp.argwhere(self.data.flatten() > ionized_threshold).flatten()
+        if self.config_params.ionized_threshold != None:
+            ionized_threshold = self.config_params.ionized_threshold
+        else:
+            batt_model_instance = Dens2bBatt(self.truth_field,
+                                             resolution=self.resolution,
+                                             set_z=self.config_params.free_params["avg_z"],
+                                             physical_side_length=self.config_params.physical_side_length,
+                                             flow=True, free_params=self.config_params.free_params,
+                                             apply_ska=self.config_params.ska_effects)
+            ionized_threshold = np.median(batt_model_instance.temp_brightness)
 
-        self.ionized_indices_mask = (self.data < ionized_threshold).flatten()
-        self.neutral_indices_mask = (self.data > ionized_threshold).flatten()
-
+        # Start with the shaped boolean masks (most fundamental)
         self.ionized_indices_mask_SHAPED = (self.data < ionized_threshold)
         self.neutral_indices_mask_SHAPED = (self.data > ionized_threshold)
+
+        # Flatten the masks
+        self.ionized_indices_mask = self.ionized_indices_mask_SHAPED.flatten()
+        self.neutral_indices_mask = self.neutral_indices_mask_SHAPED.flatten()
+
+        # Derive integer indices from boolean masks (more efficient)
+        self.ionized_indices_flattened = jnp.where(self.ionized_indices_mask)[0]
+        self.neutral_indices_flattened = jnp.where(self.neutral_indices_mask)[0]
+
+        # 2D indices (if needed)
+        self.ionized_indices = jnp.where(self.ionized_indices_mask_SHAPED)
+        self.neutral_indices = jnp.where(self.neutral_indices_mask_SHAPED)
 
         # self.truth_field = self.truth_field.at[self.ionized_indices].set(0)
 
@@ -223,7 +242,7 @@ class SwitchMinimizer:
         if not self.config_params.noise_off:
             print("Added noise... NOTE THAT THIS COULD CAUSE DATA VALUES TO FALL BELOW 0.")
             # Assume that the noise is 10% of the rms of PRE-noised field, SCALE_NUM IS MULTIPLIED BY RMS IN FUNCTION
-            self.data = self.data + self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
+            self.data = self.data + self.ska.sigma_th * self.create_jax_normal_field(100)  # 100 is the seed of the noise (same each time)
         self.rms_Tb = 0.1
         if self.config_params.ska_effects and not self.config_params.cov_matrix_data:
             try:
@@ -255,15 +274,17 @@ class SwitchMinimizer:
                 )
                 self.s_field_original = self.s_field = starting_field_pspec.delta_x()
             else:
-                self.s_field_original = self.create_normal_field(std_dev=0.1)
+                self.s_field_original = self.s_field = self.create_normal_field(std_dev=0.1)
                 # Currently feeding standard deviation of truth field, could change this to data / 27 but think the latter
                 # might make initial amplitudes too high
                 # self.s_field = self.s_field.at[self.ionized_indices_flattened].set(1)
-                noise = jnp.asarray(self.s_field_original.flatten())
-                # print("trying with assumption that we know neutral pixels")
                 # truth_field_flattened = jnp.asarray(self.truth_field.flatten())
                 # self.s_field = self.s_field_original = truth_field_flattened + 1
-                # self.s_field = self.s_field.at[self.neutral_indices_flattened].set(truth_field_flattened[self.neutral_indices_flattened])
+                if self.config_params.know_neutral_pixels:
+                    print("trying with assumption that we know neutral pixels")
+                    self.s_field_original = self.s_field_original.at[self.neutral_indices].set(self.truth_field[self.neutral_indices])
+
+
 
         # flatten s_field for input to optimizer
         self.s_field = jnp.asarray(self.s_field_original.flatten())
@@ -532,7 +553,7 @@ class SwitchMinimizer:
             prior = (real_prior + imag_prior) / self.config_params.side_length**self.config_params.dim
         elif self.config_params.new_prior:
             sigma = counts ** 2
-            prior = jnp.sum(pspec_difference**2/sigma)
+            prior = jnp.sum((pspec_difference**2) / sigma)
 
         if self.likelihood_off:
             likelihood = 0
@@ -588,6 +609,7 @@ class SwitchMinimizer:
                 # ensure_physical=True
             )
         else:
+            print("TESTING, not using truth matter power spectrum")
             ## should only be used for setting an initial test field
             self.pb = pbox.PowerBox(
                 N=self.config_params.side_length,  # number of wavenumbers

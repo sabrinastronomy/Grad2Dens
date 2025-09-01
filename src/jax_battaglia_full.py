@@ -162,7 +162,6 @@ class Dens2bBatt:
 
     def get_x_hi(self, tanh=True):
         if tanh:
-            print("USING TANH SLOPE")
             # self.z_re = jnp.real(self.z_re)
             self.X_HI = (jnp.tanh(self.tanh_slope * (self.set_z - self.z_re)) + 1.) / 2.
         else:
